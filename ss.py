@@ -8,28 +8,60 @@ from plotly.subplots import make_subplots
 # -----------------------------------------------------------------------------
 # 1. PAGE CONFIGURATION & SETUP
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Crypto Quantitative Backtest System", layout="wide")
-st.title("📈 Backtest Dashboard & Strategy Routing")
+st.set_page_config(page_title="Institutional Crypto Quant Dashboard", layout="wide")
+
+st.markdown("""
+    <style>
+    .stApp { background-color: #0E1117; }
+    .metric-card {
+        background-color: #1E222D;
+        padding: 15px;
+        border-radius: 8px;
+        border: 1px solid #2A2E39;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+st.title("🛡️ Crypto Quantitative Backtest & Portfolio System")
 
 # -----------------------------------------------------------------------------
 # 2. SIDEBAR CONFIGURATION
 # -----------------------------------------------------------------------------
-st.sidebar.header("⚙️ ตั้งค่าพารามิเตอร์")
+st.sidebar.header("⚙️ 1. เลือกสินทรัพย์และไทม์เฟรม")
 
-symbol = st.sidebar.text_input("สัญลักษณ์ Asset", value="BTC-USD")
-period = st.sidebar.selectbox("ช่วงเวลาย้อนหลัง", options=["3mo", "6mo", "1y", "2y", "max"], index=2)
+crypto_presets = {
+    "Bitcoin (BTC/USD)": "BTC-USD",
+    "Ethereum (ETH/USD)": "ETH-USD",
+    "Solana (SOL/USD)": "SOL-USD",
+    "Binance Coin (BNB/USD)": "BNB-USD",
+    "Ripple (XRP/USD)": "XRP-USD",
+    "Cardano (ADA/USD)": "ADA-USD",
+    "Dogecoin (DOGE/USD)": "DOGE-USD",
+    "Avalanche (AVAX/USD)": "AVAX-USD",
+    "Custom (ระบุเอง)": "CUSTOM"
+}
+
+selected_preset = st.sidebar.selectbox("เลือกเหรียญยอดนิยม", options=list(crypto_presets.keys()), index=0)
+
+if crypto_presets[selected_preset] == "CUSTOM":
+    symbol = st.sidebar.text_input("พิมพ์สัญลักษณ์ Ticker (เช่น NEAR-USD)", value="NEAR-USD").upper()
+else:
+    symbol = crypto_presets[selected_preset]
+
+period = st.sidebar.selectbox("ช่วงเวลาย้อนหลัง", options=["3mo", "6mo", "1y", "2y", "5y"], index=2)
 interval = st.sidebar.selectbox("Timeframe", options=["1d", "4h", "1h"], index=0)
 
-st.sidebar.subheader("💰 การเงินและค่าธรรมเนียม")
+st.sidebar.subheader("💰 2. บริหารเงินทุน (Money Management)")
 initial_capital = st.sidebar.number_input("เงินทุนเริ่มต้น ($)", value=1000.0, step=100.0)
-fee_rate = st.sidebar.number_input("ค่าธรรมเนียมต่อเที่ยว (%)", value=0.1, step=0.05) / 100
+risk_per_trade_pct = st.sidebar.number_input("ความเสี่ยงต่อไม้ (%)", value=2.0, step=0.5) / 100
+fee_rate = st.sidebar.number_input("ค่าธรรมเนียมต่อเที่ยว (%)", value=0.1, step=0.01) / 100
 
-st.sidebar.subheader("🎯 Risk Management (ATR Based)")
+st.sidebar.subheader("🎯 3. การจัดการความเสี่ยง (ATR Risk)")
 atr_period = st.sidebar.number_input("ATR Period", value=14)
 sl_multiplier = st.sidebar.number_input("Stop Loss (x ATR)", value=2.0, step=0.1)
 tp_multiplier = st.sidebar.number_input("Take Profit (x ATR)", value=4.0, step=0.1)
 
-st.sidebar.subheader("🧠 เลือกกลยุทธ์")
+st.sidebar.subheader("🧠 4. เลือกระบบเทรด (Strategy)")
 strategy_options = [
     "01. Simple Moving Average Crossover",
     "02. RSI Overbought/Oversold",
@@ -46,40 +78,41 @@ strategy_options = [
     "13. Keltner Channel Squeeze",
     "14. Money Flow Index Divergence",
     "15. Fibonacci Retracement Auto Zone",
-    "16. Trend-Regime Dynamic Pullback (แนะนำแก้พอร์ต)"
+    "16. Trend-Regime Dynamic Pullback (ปรับปรุงสูตร)"
 ]
-strategy_choice = st.sidebar.selectbox("เลือกกลยุทธ์ที่ต้องการทดสอบ", options=strategy_options, index=15)
+strategy_choice = st.sidebar.selectbox("เลือกกลยุทธ์", options=strategy_options, index=15)
 
 # -----------------------------------------------------------------------------
-# 3. DATA FETCHING & PURE PANDAS INDICATOR CALCULATIONS
+# 3. DATA FETCHING & INDICATORS
 # -----------------------------------------------------------------------------
 @st.cache_data
 def load_data(ticker, p, i):
-    df = yf.download(ticker, period=p, interval=i)
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-    df.dropna(inplace=True)
-    return df
+    try:
+        df = yf.download(ticker, period=p, interval=i)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        df.dropna(inplace=True)
+        return df
+    except Exception as e:
+        return pd.DataFrame()
 
 df = load_data(symbol, period, interval)
 
-if df.empty:
-    st.error("ไม่สามารถดึงข้อมูลได้ กรุณาตรวจสอบสัญลักษณ์ Asset")
+if df.empty or len(df) < 50:
+    st.error(f"❌ ไม่สามารถโหลดข้อมูลสำหรับ {symbol} ได้ หรือข้อมูลมีน้อยเกินไป กรุณาตรวจสอบสัญลักษณ์ Asset")
     st.stop()
 
-# 1. Exponential Moving Averages (EMA)
+# Indicator Calculations
 df["EMA20"] = df["Close"].ewm(span=20, adjust=False).mean()
 df["EMA50"] = df["Close"].ewm(span=50, adjust=False).mean()
 df["EMA200"] = df["Close"].ewm(span=200, adjust=False).mean()
 
-# 2. Relative Strength Index (RSI 14)
 delta = df["Close"].diff()
 gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
 loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
 rs = gain / loss
 df["RSI"] = 100 - (100 / (1 + rs))
 
-# 3. Average True Range (ATR 14)
 high_low = df["High"] - df["Low"]
 high_close = (df["High"] - df["Close"].shift()).abs()
 low_close = (df["Low"] - df["Close"].shift()).abs()
@@ -87,7 +120,6 @@ ranges = pd.concat([high_low, high_close, low_close], axis=1)
 true_range = ranges.max(axis=1)
 df["ATR"] = true_range.rolling(atr_period).mean()
 
-# 4. Average Directional Index (ADX 14)
 up_move = df["High"].diff()
 down_move = -df["Low"].diff()
 plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
@@ -98,11 +130,9 @@ minus_di = 100 * (pd.Series(minus_dm, index=df.index).rolling(14).sum() / tr14)
 dx = 100 * (abs(plus_di - minus_di) / (plus_di + minus_di))
 df["ADX"] = dx.rolling(14).mean()
 
-# 5. VWAP Baseline
 vyp = (df["High"] + df["Low"] + df["Close"]) / 3 * df["Volume"]
 df["VWAP"] = vyp.cumsum() / df["Volume"].cumsum()
 
-# 6. MACD Setup
 ema12 = df["Close"].ewm(span=12, adjust=False).mean()
 ema26 = df["Close"].ewm(span=26, adjust=False).mean()
 df["MACD"] = ema12 - ema26
@@ -127,16 +157,16 @@ elif "03. MACD Signal Line Crossover" in strategy_choice:
     df["Sell_Signal"] = (df["MACD"] < df["MACD_Signal"]) & (df["MACD"].shift(1) >= df["MACD_Signal"].shift(1))
 
 elif "16. Trend-Regime Dynamic Pullback" in strategy_choice:
-    uptrend_strong = (df["Close"] > df["EMA200"]) & (df["ADX"] > 20)
-    rsi_pullback = (df["RSI"] >= 40) & (df["RSI"] <= 55)
-    price_near_support = (df["Low"] <= df["EMA20"] * 1.01) | (df["Low"] <= df["VWAP"] * 1.01)
+    uptrend_strong = (df["Close"] > df["EMA200"]) & (df["ADX"] > 18)
+    rsi_pullback = (df["RSI"] >= 38) & (df["RSI"] <= 58)
+    price_near_support = (df["Low"] <= df["EMA20"] * 1.015) | (df["Low"] <= df["VWAP"] * 1.015)
     green_candle = df["Close"] > df["Open"]
     
     df["Buy_Signal"] = uptrend_strong & rsi_pullback & price_near_support & green_candle
-    df["Sell_Signal"] = (df["RSI"] > 72) | (df["Close"] < df["EMA50"])
+    df["Sell_Signal"] = (df["RSI"] > 75) | (df["Close"] < df["EMA50"])
 
 # -----------------------------------------------------------------------------
-# 5. BACKTEST ENGINE
+# 5. QUANT BACKTEST ENGINE (POSITION SIZING INCLUDED)
 # -----------------------------------------------------------------------------
 capital = initial_capital
 position = False
@@ -144,7 +174,11 @@ entry_price = 0.0
 sl_price = 0.0
 tp_price = 0.0
 entry_date = None
+position_size = 0.0
 trades = []
+
+equity_curve = [initial_capital]
+equity_dates = [df.index[0]]
 
 for i in range(len(df)):
     current_date = df.index[i]
@@ -154,148 +188,182 @@ for i in range(len(df)):
     current_atr = df["ATR"].iloc[i]
 
     if position:
+        is_exit = False
+        exit_price = 0.0
+        reason = ""
+
         if current_low <= sl_price:
             exit_price = sl_price
-            pnl = (exit_price - entry_price) / entry_price
-            net_pnl = pnl - (fee_rate * 2)
-            profit_usd = capital * net_pnl
-            capital += profit_usd
-            trades.append({
-                "Entry Date": entry_date, "Exit Date": current_date,
-                "Entry": entry_price, "Exit": exit_price,
-                "Result": "SL", "PnL (%)": net_pnl * 100, "Profit ($)": profit_usd
-            })
-            position = False
-
+            reason = "SL"
+            is_exit = True
         elif current_high >= tp_price:
             exit_price = tp_price
-            pnl = (exit_price - entry_price) / entry_price
-            net_pnl = pnl - (fee_rate * 2)
-            profit_usd = capital * net_pnl
-            capital += profit_usd
-            trades.append({
-                "Entry Date": entry_date, "Exit Date": current_date,
-                "Entry": entry_price, "Exit": exit_price,
-                "Result": "TP", "PnL (%)": net_pnl * 100, "Profit ($)": profit_usd
-            })
-            position = False
-            
+            reason = "TP"
+            is_exit = True
         elif df["Sell_Signal"].iloc[i]:
             exit_price = current_close
-            pnl = (exit_price - entry_price) / entry_price
-            net_pnl = pnl - (fee_rate * 2)
-            profit_usd = capital * net_pnl
-            capital += profit_usd
+            reason = "SIGNAL"
+            is_exit = True
+
+        if is_exit:
+            raw_pnl_usd = (exit_price - entry_price) * position_size
+            total_fee = (entry_price * position_size * fee_rate) + (exit_price * position_size * fee_rate)
+            net_profit_usd = raw_pnl_usd - total_fee
+            capital += net_profit_usd
+            
+            pnl_pct = (net_profit_usd / (entry_price * position_size)) * 100
+
             trades.append({
                 "Entry Date": entry_date, "Exit Date": current_date,
                 "Entry": entry_price, "Exit": exit_price,
-                "Result": "SIGNAL_SELL", "PnL (%)": net_pnl * 100, "Profit ($)": profit_usd
+                "Size (Units)": position_size, "Result": reason,
+                "PnL (%)": pnl_pct, "Profit ($)": net_profit_usd,
+                "Capital After Trade": capital
             })
             position = False
 
-    elif not position and df["Buy_Signal"].iloc[i]:
+    elif not position and df["Buy_Signal"].iloc[i] and not np.isnan(current_atr):
         entry_price = current_close
         entry_date = current_date
         sl_price = entry_price - (current_atr * sl_multiplier)
         tp_price = entry_price + (current_atr * tp_multiplier)
-        position = True
+        
+        risk_amount = capital * risk_per_trade_pct
+        risk_per_unit = entry_price - sl_price
+        
+        if risk_per_unit > 0:
+            position_size = risk_amount / risk_per_unit
+            max_size_by_capital = (capital * 0.95) / entry_price
+            position_size = min(position_size, max_size_by_capital)
+            position = True
 
-# -----------------------------------------------------------------------------
-# 6. DISPLAY RESULTS & DASHBOARD
-# -----------------------------------------------------------------------------
+    equity_curve.append(capital)
+    equity_dates.append(current_date)
+
 trades_df = pd.DataFrame(trades)
-
-st.subheader(f"📊 ผลการทดสอบกลยุทธ์ย้อนหลัง: {strategy_choice}")
-col1, col2, col3, col4 = st.columns(4)
-
-if not trades_df.empty:
-    total_trades = len(trades_df)
-    wins = len(trades_df[trades_df["PnL (%)"] > 0])
-    win_rate = (wins / total_trades) * 100
-    net_profit_usd = capital - initial_capital
-    ret_pct = (net_profit_usd / initial_capital) * 100
-
-    col1.metric("จำนวนไม้ที่ปิดแล้ว", f"{total_trades} ไม้")
-    col2.metric("อัตราการชนะ (Win Rate)", f"{win_rate:.1f}%")
-    col3.metric("กำไรสุทธิรวม ($)", f"${net_profit_usd:.2f}")
-    col4.metric("ผลตอบแทนสะสม (%)", f"{ret_pct:.2f}%", delta=f"{ret_pct:.2f}%")
-else:
-    col1.metric("จำนวนไม้ที่ปิดแล้ว", "0 ไม้")
-    col2.metric("อัตราการชนะ (Win Rate)", "0.0%")
-    col3.metric("กำไรสุทธิรวม ($)", "$0.00")
-    col4.metric("ผลตอบแทนสะสม (%)", "0.00%")
-    st.warning("ไม่พบสัญญาณซื้อที่ตรงเงื่อนไขในช่วงเวลาที่เลือก")
+equity_df = pd.DataFrame({"Date": equity_dates, "Equity": equity_curve}).set_index("Date")
 
 # -----------------------------------------------------------------------------
-# 7. INTERACTIVE PLOTLY CHARTING (ส่วนที่เพิ่มเพื่อให้แสดงกราฟราคา)
+# 6. INTERACTIVE PLOTLY CHARTING
 # -----------------------------------------------------------------------------
-st.subheader("📉 กราฟวิเคราะห์ราคาและจุดเข้า/ออกออเดอร์ (Interactive Chart)")
+st.subheader(f"📉 กราฟราคาสินทรัพย์ & จุดเข้าทำกำไร/ตัดขาดทุน ({symbol})")
 
 fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
                     vertical_spacing=0.03, row_heights=[0.75, 0.25])
 
-# กราฟแท่งเทียน Candlestick
 fig.add_trace(go.Candlestick(
     x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"],
     name="Price"
 ), row=1, col=1)
 
-# เส้น Moving Averages & VWAP
-fig.add_trace(go.Scatter(x=df.index, y=df["EMA20"], line=dict(color='orange', width=1), name="EMA 20"), row=1, col=1)
-fig.add_trace(go.Scatter(x=df.index, y=df["EMA200"], line=dict(color='purple', width=1.5), name="EMA 200"), row=1, col=1)
-fig.add_trace(go.Scatter(x=df.index, y=df["VWAP"], line=dict(color='blue', width=1, dash='dash'), name="VWAP"), row=1, col=1)
+fig.add_trace(go.Scatter(x=df.index, y=df["EMA20"], line=dict(color='#FF9900', width=1), name="EMA 20"), row=1, col=1)
+fig.add_trace(go.Scatter(x=df.index, y=df["EMA200"], line=dict(color='#9B51E0', width=1.5), name="EMA 200"), row=1, col=1)
+fig.add_trace(go.Scatter(x=df.index, y=df["VWAP"], line=dict(color='#2F80ED', width=1, dash='dash'), name="VWAP"), row=1, col=1)
 
-# จุดเข้าซื้อ (Buy Marker) และ จุดออกจากออเดอร์ (Sell Marker) จากผล Backtest
 if not trades_df.empty:
     fig.add_trace(go.Scatter(
         x=trades_df["Entry Date"], y=trades_df["Entry"],
-        mode="markers", marker=dict(symbol="triangle-up", size=11, color="lime"),
+        mode="markers", marker=dict(symbol="triangle-up", size=12, color="#00E676"),
         name="Buy Entry"
     ), row=1, col=1)
     
     fig.add_trace(go.Scatter(
         x=trades_df["Exit Date"], y=trades_df["Exit"],
-        mode="markers", marker=dict(symbol="triangle-down", size=11, color="red"),
-        name="Exit (TP/SL/Signal)"
+        mode="markers", marker=dict(symbol="triangle-down", size=12, color="#FF5252"),
+        name="Exit Order"
     ), row=1, col=1)
 
-# กราฟ RSI (Row 2)
-fig.add_trace(go.Scatter(x=df.index, y=df["RSI"], line=dict(color='green', width=1), name="RSI"), row=2, col=1)
-fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
-fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
+fig.add_trace(go.Scatter(x=df.index, y=df["RSI"], line=dict(color='#00E676', width=1), name="RSI"), row=2, col=1)
+fig.add_hline(y=70, line_dash="dash", line_color="#FF5252", row=2, col=1)
+fig.add_hline(y=30, line_dash="dash", line_color="#00E676", row=2, col=1)
 
 fig.update_layout(
-    height=650,
-    margin=dict(l=10, r=10, t=30, b=10),
+    height=600,
+    margin=dict(l=10, r=10, t=20, b=10),
     xaxis_rangeslider_visible=False,
-    template="plotly_dark"
+    template="plotly_dark",
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
 )
 
 st.plotly_chart(fig, use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# 8. CURRENT MARKET STATUS & TRADE LOG
+# 7. PERFORMANCE DASHBOARD METRICS (ย้ายลงมาใต้กราฟตามสั่ง)
+# -----------------------------------------------------------------------------
+st.markdown("---")
+st.subheader(f"📊 สรุปประสิทธิภาพกลยุทธ์: {strategy_choice}")
+
+col1, col2, col3, col4, col5, col6 = st.columns(6)
+
+if not trades_df.empty:
+    total_trades = len(trades_df)
+    wins = len(trades_df[trades_df["Profit ($)"] > 0])
+    losses = len(trades_df[trades_df["Profit ($)"] <= 0])
+    win_rate = (wins / total_trades) * 100 if total_trades > 0 else 0
+    net_profit_usd = capital - initial_capital
+    ret_pct = (net_profit_usd / initial_capital) * 100
+    
+    gross_profit = trades_df[trades_df["Profit ($)"] > 0]["Profit ($)"].sum()
+    gross_loss = abs(trades_df[trades_df["Profit ($)"] < 0]["Profit ($)"].sum())
+    profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else (gross_profit if gross_profit > 0 else 0)
+    
+    equity_df["Peak"] = equity_df["Equity"].cummax()
+    equity_df["Drawdown"] = (equity_df["Equity"] - equity_df["Peak"]) / equity_df["Peak"]
+    max_drawdown = equity_df["Drawdown"].min() * 100
+
+    col1.metric("จำนวนไม้ทั้งหมด", f"{total_trades} ไม้")
+    col2.metric("Win Rate", f"{win_rate:.1f}%")
+    col3.metric("กำไรสุทธิ ($)", f"${net_profit_usd:.2f}")
+    col4.metric("ผลตอบแทนสะสม (%)", f"{ret_pct:.2f}%", delta=f"{ret_pct:.2f}%")
+    col5.metric("Profit Factor", f"{profit_factor:.2f}")
+    col6.metric("Max Drawdown", f"{max_drawdown:.2f}%", delta_color="inverse")
+else:
+    col1.metric("จำนวนไม้ทั้งหมด", "0 ไม้")
+    col2.metric("Win Rate", "0.0%")
+    col3.metric("กำไรสุทธิ ($)", "$0.00")
+    col4.metric("ผลตอบแทนสะสม (%)", "0.00%")
+    col5.metric("Profit Factor", "0.00")
+    col6.metric("Max Drawdown", "0.00%")
+    st.warning("⚠️ ไม่พบสัญญาณซื้อที่ตรงตามเงื่อนไขในช่วงเวลาที่เลือก")
+
+# -----------------------------------------------------------------------------
+# 8. EQUITY CURVE & DRAWDOWN ANALYSIS (กราฟการเติบโตของพอร์ต)
 # -----------------------------------------------------------------------------
 if not trades_df.empty:
-    st.subheader("📋 ประวัติการเทรด (Trade Log)")
+    st.subheader("📈 การเติบโตของเงินทุนและสภาวะย่อตัวของพอร์ต (Equity Curve & Drawdown)")
+    
+    fig_eq = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.7, 0.3])
+    
+    fig_eq.add_trace(go.Scatter(x=equity_df.index, y=equity_df["Equity"], mode='lines', name='Portfolio Value ($)', line=dict(color='#00E676', width=2)), row=1, col=1)
+    fig_eq.add_trace(go.Scatter(x=equity_df.index, y=equity_df["Drawdown"] * 100, mode='lines', name='Drawdown (%)', line=dict(color='#FF5252', width=1.5), fill='tozeroy'), row=2, col=1)
+    
+    fig_eq.update_layout(height=380, margin=dict(l=10, r=10, t=10, b=10), template="plotly_dark", showlegend=False)
+    st.plotly_chart(fig_eq, use_container_width=True)
+
+# -----------------------------------------------------------------------------
+# 9. TRADE LOG & LIVE STATUS
+# -----------------------------------------------------------------------------
+if not trades_df.empty:
+    st.markdown("---")
+    st.subheader("📋 ตารางบันทึกการเทรด (Trade Log Detailed)")
     st.dataframe(trades_df.style.format({
-        "Entry": "{:.2f}", "Exit": "{:.2f}",
-        "PnL (%)": "{:.2f}%", "Profit ($)": "{:.2f}"
-    }))
+        "Entry": "{:.2f}", "Exit": "{:.2f}", "Size (Units)": "{:.4f}",
+        "PnL (%)": "{:.2f}%", "Profit ($)": "{:.2f}", "Capital After Trade": "{:.2f}"
+    }), use_container_width=True)
 
 st.markdown("---")
-st.subheader("📌 สถานะสัญญาณปัจจุบัน (ยืนยันเฉพาะแท่งที่ปิดแล้ว)")
+st.subheader("📌 สถานะสัญญาณปัจจุบัน (การวิเคราะห์แท่งล่าสุด)")
 last_row = df.iloc[-1]
 
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("ราคาปัจจุบัน", f"{last_row['Close']:,.2f}")
+c1.metric("ราคาปัจจุบัน", f"${last_row['Close']:,.2f}")
 c2.metric("RSI (14)", f"{last_row['RSI']:.2f}")
-c3.metric("ADX Trend Strength", f"{last_row['ADX']:.2f}")
-c4.metric("VWAP Baseline", f"{last_row['VWAP']:,.2f}")
+c3.metric("ADX Trend", f"{last_row['ADX']:.2f}")
+c4.metric("VWAP Level", f"${last_row['VWAP']:,.2f}")
 
 if position:
-    st.warning(f"🔔 หมายเหตุ: มี 1 ออเดอร์เปิดค้างอยู่ | เข้าเมื่อ: {entry_date} | ราคาเข้า: ${entry_price:,.2f} | Target TP: ${tp_price:,.2f} | Cut SL: ${sl_price:,.2f}")
+    st.warning(f"🔔 มีสถานะค้างอยู่ 1 ออเดอร์ | เข้าซื้อเมื่อ: {entry_date} | ราคาเข้า: ${entry_price:,.2f} | เป้าหมาย TP: ${tp_price:,.2f} | จุดตัดขาดทุน SL: ${sl_price:,.2f}")
 elif last_row["Buy_Signal"]:
-    st.success(f"✅ BUY SIGNAL (ยืนยันจบแท่ง) | ราคาเข้า: {last_row['Close']:,.2f} | TP: {last_row['Close'] + (last_row['ATR']*tp_multiplier):,.2f} | SL: {last_row['Close'] - (last_row['ATR']*sl_multiplier):,.2f}")
+    st.success(f"✅ BUY SIGNAL CONFIRMED | ราคาปัจจุบัน: ${last_row['Close']:,.2f} | TP แนะนำ: ${last_row['Close'] + (last_row['ATR']*tp_multiplier):,.2f} | SL แนะนำ: ${last_row['Close'] - (last_row['ATR']*sl_multiplier):,.2f}")
 else:
-    st.info("⏳ NO SIGNAL - ตลาดไม่ได้อยู่ในจุดย่อตัวที่ปลอดภัย (เน้นถือเงินสด รอจังหวะย่อในเทรนด์ใหญ่)")
+    st.info("⏳ NO SIGNAL - ไม่อยู่ในจุดย่อตัวที่ได้เปรียบ แนะนำถือเงินสด (Cash Position) ไว้ก่อน")
