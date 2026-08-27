@@ -7,7 +7,7 @@ import streamlit as st
 import yfinance as yf
 
 st.set_page_config(layout="wide", page_title="BTC & Asset 15-Strategy Tester")
-st.title("🎯 15-Strategy Trade Signal System + Backtest & Dynamic Engine")
+st.title("🎯 15-Strategy Trade Signal System + Advanced Backtest Engine")
 
 # ---------------------------------------------------------
 # 0. Helper Functions (ADX, ATR, StochRSI, VWAP, PSAR, Line)
@@ -112,14 +112,14 @@ ALL_TICKERS = [
     "NVDA", "AAPL", "TSLA", "MSFT", "GOOGL", "AMZN", "META"
 ]
 
-st.sidebar.header("⚙️ ตั้งค่าระบบและกลยุทธ์")
+st.sidebar.header("⚙️ ตั้งค่าระบบและ Money Management")
 
 selected_asset = st.sidebar.selectbox("🔍 เลือก/พิมพ์ค้นหา Symbol:", options=ALL_TICKERS, index=0)
 custom_ticker = st.sidebar.text_input("หรือพิมพ์ Symbol อื่นๆ:", "").upper()
 final_symbol = custom_ticker if custom_ticker.strip() != "" else selected_asset
 
 strategy_choice = st.sidebar.selectbox(
-    "📊 เลือกกลยุทธ์การเทรด (รวม 15 กลยุทธ์):",
+    "📊 เลือกกลยุทธ์การเทรด:",
     options=[
         "1. Strict Trend Dip Buy (EMA200 + RSI + ADX)",
         "2. Volatility Squeeze Breakout (Bollinger + Vol)",
@@ -144,8 +144,13 @@ timeframe_map = {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "1d": "1d", "
 timeframe_user = st.sidebar.selectbox("Timeframe:", options=list(timeframe_map.keys()), index=4)
 timeframe = timeframe_map[timeframe_user]
 
-start_date = st.sidebar.date_input("วันที่เริ่ม Backtest (ทดสอบจนถึงปัจจุบัน):", datetime.date(2023, 1, 1))
+start_date = st.sidebar.date_input("วันที่เริ่ม Backtest:", datetime.date(2023, 1, 1))
 rr_ratio = st.sidebar.slider("Risk : Reward Ratio (R:R):", 1.0, 4.0, 2.0, step=0.5)
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("💰 บริหารเงินทุน & ค่าธรรมเนียม")
+trade_capital = st.sidebar.number_input("จำนวนเงินลงทุนต่อไม้ (บาท/USD):", min_value=100.0, value=2000.0, step=500.0)
+trading_fee_pct = st.sidebar.number_input("ค่าธรรมเนียม + Slippage ต่อขา (%):", min_value=0.0, max_value=10.0, value=1.5, step=0.1)
 
 st.sidebar.markdown("---")
 line_token = st.sidebar.text_input("ใส่ Line Notify Token (ถ้ามี):", type="password")
@@ -388,11 +393,11 @@ if not df_raw.empty:
             st.info("⏳ แท่งล่าสุดที่เพิ่งปิดยังไม่มีสัญญาณซื้อขาย (สถานะปกติ)")
 
         # ---------------------------------------------------------
-        # 6. FIXED BACKTEST ENGINE & TRADE HISTORY LOGS
+        # 6. BACKTEST ENGINE WITH FEE & POSITION SIZING
         # ---------------------------------------------------------
         st.markdown("---")
         latest_time_str = df_filtered.index[-1].strftime("%Y-%m-%d %H:%M")
-        st.subheader(f"📊 ผลการทดสอบกลยุทธ์ย้อนหลัง (Backtest จนถึงปัจจุบัน: {latest_time_str})")
+        st.subheader(f"📊 ผลการทดสอบกลยุทธ์ย้อนหลัง (เงินทุนไม้ละ {trade_capital:,.2f} | ค่าธรรมเนียม {trading_fee_pct}%)")
 
         trades = []
         in_position = False
@@ -400,7 +405,8 @@ if not df_raw.empty:
         entry_time = None
         sl_price = 0
         tp_price = 0
-        equity_curve = [100.0]
+        units_bought = 0
+        fee_rate = trading_fee_pct / 100.0
 
         for i in range(len(df_filtered)):
             current_time = df_filtered.index[i]
@@ -408,42 +414,45 @@ if not df_raw.empty:
             low_p = df_filtered["Low"].iloc[i]
             high_p = df_filtered["High"].iloc[i]
 
-            # 1. ตรวจสอบการออกจาก Position ก่อน (ถ้าถือออเดอร์อยู่)
+            # 1. Check Exit condition first (if holding position)
             if in_position:
-                pnl = 0
                 exit_reason = None
                 exit_price = price
 
-                # ตรวจสอบ SL ก่อน TP (Conservative approach)
                 if low_p <= sl_price:
                     exit_price = sl_price
-                    pnl = (sl_price - buy_price) / buy_price
                     exit_reason = "STOP LOSS"
                 elif high_p >= tp_price:
                     exit_price = tp_price
-                    pnl = (tp_price - buy_price) / buy_price
                     exit_reason = "TAKE PROFIT"
                 elif sell_filtered.iloc[i]:
                     exit_price = price
-                    pnl = (price - buy_price) / buy_price
                     exit_reason = "SELL SIGNAL"
 
                 if exit_reason:
+                    gross_return = units_bought * exit_price
+                    exit_fee = gross_return * fee_rate
+                    net_return = gross_return - exit_fee
+                    
+                    net_pnl_cash = net_return - trade_capital
+                    net_pnl_pct = (net_pnl_cash / trade_capital) * 100
+
                     trades.append({
                         "Trade #": len(trades) + 1,
                         "Entry Time": entry_time.strftime("%Y-%m-%d %H:%M"),
                         "Exit Time": current_time.strftime("%Y-%m-%d %H:%M"),
-                        "Type": "BUY",
                         "Entry Price": buy_price,
                         "Exit Price": exit_price,
-                        "PnL (%)": pnl * 100,
-                        "Result": "WIN" if pnl > 0 else "LOSS",
+                        "Capital Input": trade_capital,
+                        "Net Return": net_return,
+                        "PnL (บาท/USD)": net_pnl_cash,
+                        "Net PnL (%)": net_pnl_pct,
+                        "Result": "WIN" if net_pnl_cash > 0 else "LOSS",
                         "Exit Reason": exit_reason
                     })
-                    equity_curve.append(equity_curve[-1] * (1 + pnl))
                     in_position = False
 
-            # 2. ตรวจสอบการเปิด Position ใหม่ (ต้องไม่อยู่ใน Position)
+            # 2. Check Entry condition (if not holding position)
             if not in_position and buy_filtered.iloc[i]:
                 in_position = True
                 buy_price = price
@@ -451,35 +460,43 @@ if not df_raw.empty:
                 sl_price = df_filtered["SL"].iloc[i]
                 tp_price = df_filtered["TP"].iloc[i]
 
+                # คำนวณการซื้อแบบหักค่าธรรมเนียมขาเข้า
+                entry_fee = trade_capital * fee_rate
+                net_capital_for_buy = trade_capital - entry_fee
+                units_bought = net_capital_for_buy / buy_price
+
         if in_position:
             current_price = df_filtered["Close"].iloc[-1]
-            unrealized_pnl = (current_price - buy_price) / buy_price * 100
-            st.warning(f"🔔 **หมายเหตุ:** ปัจจุบันมี 1 ออเดอร์ที่ยังเปิดค้างอยู่ (Open Position) ตั้งแต่ {entry_time.strftime('%Y-%m-%d %H:%M')} | ราคาเข้า: ${buy_price:,.2f} | PnL ปัจจุบัน: {unrealized_pnl:+.2f}%")
+            unrealized_gross = units_bought * current_price
+            unrealized_net = unrealized_gross * (1 - fee_rate)
+            unrealized_pnl = unrealized_net - trade_capital
+            unrealized_pnl_pct = (unrealized_pnl / trade_capital) * 100
+            st.warning(f"🔔 **หมายเหตุ:** มี 1 ออเดอร์เปิดค้างอยู่ | เข้าเมื่อ: {entry_time.strftime('%Y-%m-%d %H:%M')} | ราคาเข้า: ${buy_price:,.2f} | PnL ปัจจุบัน (สุทธิหลังหัก Fee): {unrealized_pnl:+=,.2f} ({unrealized_pnl_pct:+.2f}%)")
 
         if trades:
             trade_df = pd.DataFrame(trades)
             total_trades = len(trade_df)
             wins = len(trade_df[trade_df["Result"] == "WIN"])
             win_rate = (wins / total_trades) * 100 if total_trades > 0 else 0
-            total_pnl = trade_df["PnL (%)"].sum()
-
-            eq_series = pd.Series(equity_curve)
-            cummax = eq_series.cummax()
-            drawdown = (eq_series - cummax) / (cummax + 1e-10)
-            max_dd = drawdown.min() * 100
+            
+            total_net_pnl_cash = trade_df["PnL (บาท/USD)"].sum()
+            total_net_pnl_pct = trade_df["Net PnL (%)"].sum()
 
             col_bt1, col_bt2, col_bt3, col_bt4 = st.columns(4)
-            col_bt1.metric("จำนวนไม้ที่ปิดแล้วทั้งหมด", f"{total_trades} ไม้")
+            col_bt1.metric("จำนวนไม้ที่ปิดแล้ว", f"{total_trades} ไม้")
             col_bt2.metric("อัตราการชนะ (Win Rate)", f"{win_rate:.1f}%")
-            col_bt3.metric("ผลตอบแทนสะสม (Net PnL)", f"{total_pnl:+.2f}%")
-            col_bt4.metric("ขาดทุนสะสมสูงสุด (Max DD)", f"{max_dd:.2f}%")
+            col_bt3.metric("กำไรสุทธิรวม (บาท/USD)", f"{total_net_pnl_cash:+,.2f}")
+            col_bt4.metric("ผลตอบแทนสะสมสุทธิ (%)", f"{total_net_pnl_pct:+.2f}%")
 
-            st.markdown("### 📝 ประวัติการซื้อขายรายไม้ (Trade History Logs)")
+            st.markdown("### 📝 ประวัติการซื้อขายรายไม้ (คำนวณหัก ค่าธรรมเนียมแล้ว)")
             
             formatted_trade_df = trade_df.copy()
             formatted_trade_df["Entry Price"] = formatted_trade_df["Entry Price"].apply(lambda x: f"${x:,.2f}" if x > 10 else f"${x:,.4f}")
             formatted_trade_df["Exit Price"] = formatted_trade_df["Exit Price"].apply(lambda x: f"${x:,.2f}" if x > 10 else f"${x:,.4f}")
-            formatted_trade_df["PnL (%)"] = formatted_trade_df["PnL (%)"].apply(lambda x: f"{x:+.2f}%")
+            formatted_trade_df["Capital Input"] = formatted_trade_df["Capital Input"].apply(lambda x: f"{x:,.2f}")
+            formatted_trade_df["Net Return"] = formatted_trade_df["Net Return"].apply(lambda x: f"{x:,.2f}")
+            formatted_trade_df["PnL (บาท/USD)"] = formatted_trade_df["PnL (บาท/USD)"].apply(lambda x: f"{x:+,.2f}")
+            formatted_trade_df["Net PnL (%)"] = formatted_trade_df["Net PnL (%)"].apply(lambda x: f"{x:+.2f}%")
 
             st.dataframe(
                 formatted_trade_df,
@@ -493,9 +510,9 @@ if not df_raw.empty:
 
             csv_data = trade_df.to_csv(index=False).encode('utf-8')
             st.download_button(
-                label="📥 ดาวน์โหลดประวัติการเทรดถึงปัจจุบัน (CSV)",
+                label="📥 ดาวน์โหลดประวัติการเทรด (CSV)",
                 data=csv_data,
-                file_name=f"trade_history_{final_symbol}_{strategy_choice[:2].strip()}_present.csv",
+                file_name=f"trade_history_{final_symbol}_{strategy_choice[:2].strip()}_with_fees.csv",
                 mime="text/csv"
             )
 
