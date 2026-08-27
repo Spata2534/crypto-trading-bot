@@ -2,7 +2,6 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import ta
 
 # -----------------------------------------------------------------------------
 # 1. PAGE CONFIGURATION & SETUP
@@ -21,7 +20,6 @@ interval = st.sidebar.selectbox("Timeframe", options=["1d", "4h", "1h"], index=0
 
 st.sidebar.subheader("💰 การเงินและค่าธรรมเนียม")
 initial_capital = st.sidebar.number_input("เงินทุนเริ่มต้น ($)", value=1000.0, step=100.0)
-# ปรับ default เป็น 0.1% ตามความเป็นจริงของ Exchange ( Bitkub / Binance )
 fee_rate = st.sidebar.number_input("ค่าธรรมเนียมต่อเที่ยว (%)", value=0.1, step=0.05) / 100
 
 st.sidebar.subheader("🎯 Risk Management (ATR Based)")
@@ -51,7 +49,7 @@ strategy_options = [
 strategy_choice = st.sidebar.selectbox("เลือกกลยุทธ์ที่ต้องการทดสอบ", options=strategy_options, index=15)
 
 # -----------------------------------------------------------------------------
-# 3. DATA FETCHING & INDICATOR CALCULATION
+# 3. DATA FETCHING & PURE PANDAS INDICATOR CALCULATIONS
 # -----------------------------------------------------------------------------
 @st.cache_data
 def load_data(ticker, p, i):
@@ -67,22 +65,46 @@ if df.empty:
     st.error("ไม่สามารถดึงข้อมูลได้ กรุณาตรวจสอบสัญลักษณ์ Asset")
     st.stop()
 
-# คำนวณ Indicators พื้นฐานรองรับทุกกลยุทธ์
-df["EMA20"] = ta.trend.ema_indicator(df["Close"], window=20)
-df["EMA50"] = ta.trend.ema_indicator(df["Close"], window=50)
-df["EMA200"] = ta.trend.ema_indicator(df["Close"], window=200)
-df["RSI"] = ta.momentum.rsi(df["Close"], window=14)
-df["ADX"] = ta.trend.adx(df["High"], df["Low"], df["Close"], window=14)
-df["ATR"] = ta.volatility.average_true_range(df["High"], df["Low"], df["Close"], window=atr_period)
+# 1. Exponential Moving Averages (EMA)
+df["EMA20"] = df["Close"].ewm(span=20, adjust=False).mean()
+df["EMA50"] = df["Close"].ewm(span=50, adjust=False).mean()
+df["EMA200"] = df["Close"].ewm(span=200, adjust=False).mean()
 
-# คำนวณ VWAP Baseline
+# 2. Relative Strength Index (RSI 14)
+delta = df["Close"].diff()
+gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+rs = gain / loss
+df["RSI"] = 100 - (100 / (1 + rs))
+
+# 3. Average True Range (ATR 14)
+high_low = df["High"] - df["Low"]
+high_close = (df["High"] - df["Close"].shift()).abs()
+low_close = (df["Low"] - df["Close"].shift()).abs()
+ranges = pd.concat([high_low, high_close, low_close], axis=1)
+true_range = ranges.max(axis=1)
+df["ATR"] = true_range.rolling(atr_period).mean()
+
+# 4. Average Directional Index (ADX 14)
+up_move = df["High"].diff()
+down_move = -df["Low"].diff()
+plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
+minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
+tr14 = true_range.rolling(14).sum()
+plus_di = 100 * (pd.Series(plus_dm, index=df.index).rolling(14).sum() / tr14)
+minus_di = 100 * (pd.Series(minus_dm, index=df.index).rolling(14).sum() / tr14)
+dx = 100 * (abs(plus_di - minus_di) / (plus_di + minus_di))
+df["ADX"] = dx.rolling(14).mean()
+
+# 5. VWAP Baseline
 vyp = (df["High"] + df["Low"] + df["Close"]) / 3 * df["Volume"]
 df["VWAP"] = vyp.cumsum() / df["Volume"].cumsum()
 
-# MACD Setup
-macd = ta.trend.MACD(df["Close"])
-df["MACD"] = macd.macd()
-df["MACD_Signal"] = macd.macd_signal()
+# 6. MACD Setup
+ema12 = df["Close"].ewm(span=12, adjust=False).mean()
+ema26 = df["Close"].ewm(span=26, adjust=False).mean()
+df["MACD"] = ema12 - ema26
+df["MACD_Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
 
 # -----------------------------------------------------------------------------
 # 4. STRATEGY ROUTING LOGIC
@@ -102,27 +124,27 @@ elif "03. MACD Signal Line Crossover" in strategy_choice:
     df["Buy_Signal"] = (df["MACD"] > df["MACD_Signal"]) & (df["MACD"].shift(1) <= df["MACD_Signal"].shift(1))
     df["Sell_Signal"] = (df["MACD"] < df["MACD_Signal"]) & (df["MACD"].shift(1) >= df["MACD_Signal"].shift(1))
 
-# ... (รองรับกลยุทธ์ 04-15 ตามโครงสร้างเดิม) ...
+# ... (รองรับกลยุทธ์อื่นๆ ตามโครงสร้างเดิมของคุณ) ...
 
 elif "16. Trend-Regime Dynamic Pullback" in strategy_choice:
-    # 1. เงื่อนไขเทรนด์ใหญ่: ราคาต้องอยู่เหนือ EMA200 และ ADX ยืนยันว่ามีเทรนด์ (ADX > 20)
+    # 1. เงื่อนไขเทรนด์ใหญ่: ราคา > EMA200 และ ADX > 20
     uptrend_strong = (df["Close"] > df["EMA200"]) & (df["ADX"] > 20)
     
-    # 2. เงื่อนไขย่อตัว (Pullback): RSI ต้องคายพลังงานลงมา (อยู่ระหว่าง 40 ถึง 55) ไม่ใช่ Overbought (80+)
+    # 2. เงื่อนไขย่อตัว: RSI อยู่ระหว่าง 40 ถึง 55 (บล็อกการไล่ราคา Overbought)
     rsi_pullback = (df["RSI"] >= 40) & (df["RSI"] <= 55)
     
-    # 3. เงื่อนไขราคา: เกิดแท่งเขียวกลับตัว (Close > Open) และราคาลงมาใกล้ EMA20 หรือ VWAP
+    # 3. เงื่อนไขราคา: เกิดแท่งเขียว (Close > Open) และราคาลงมาใกล้ EMA20 หรือ VWAP
     price_near_support = (df["Low"] <= df["EMA20"] * 1.01) | (df["Low"] <= df["VWAP"] * 1.01)
     green_candle = df["Close"] > df["Open"]
     
-    # Buy Signal: ต้องครบทุกเงื่อนไข (บล็อกการไล่ราคาเด็ดขาด)
+    # Buy Signal
     df["Buy_Signal"] = uptrend_strong & rsi_pullback & price_near_support & green_candle
     
-    # Sell Signal: ขายเมื่อ RSI เข้าเขต Overbought (RSI > 72) หรือราคาหลุด EMA50
+    # Sell Signal: ขายเมื่อ RSI > 72 หรือหลุด EMA50
     df["Sell_Signal"] = (df["RSI"] > 72) | (df["Close"] < df["EMA50"])
 
 # -----------------------------------------------------------------------------
-# 5. BACKTEST ENGINE (Vectorized / Loop Hybrid with ATR Risk Management)
+# 5. BACKTEST ENGINE
 # -----------------------------------------------------------------------------
 capital = initial_capital
 position = False
@@ -139,13 +161,12 @@ for i in range(len(df)):
     current_low = df["Low"].iloc[i]
     current_atr = df["ATR"].iloc[i]
 
-    # กรณีถือ Positon อยู่ -> เช็ค Exit Logic (TP / SL / Sell Signal)
     if position:
-        # 1. เช็ค Stop Loss
+        # Check Stop Loss
         if current_low <= sl_price:
             exit_price = sl_price
             pnl = (exit_price - entry_price) / entry_price
-            net_pnl = pnl - (fee_rate * 2)  # หัก Fee ขาเข้าและขาออก
+            net_pnl = pnl - (fee_rate * 2)
             profit_usd = capital * net_pnl
             capital += profit_usd
             trades.append({
@@ -155,7 +176,7 @@ for i in range(len(df)):
             })
             position = False
 
-        # 2. เช็ค Take Profit
+        # Check Take Profit
         elif current_high >= tp_price:
             exit_price = tp_price
             pnl = (exit_price - entry_price) / entry_price
@@ -169,7 +190,7 @@ for i in range(len(df)):
             })
             position = False
             
-        # 3. เช็ค Sell Signal ตามกลยุทธ์
+        # Check Sell Signal
         elif df["Sell_Signal"].iloc[i]:
             exit_price = current_close
             pnl = (exit_price - entry_price) / entry_price
@@ -183,7 +204,6 @@ for i in range(len(df)):
             })
             position = False
 
-    # กรณีไม่มี Position -> เช็คสัญญาณ Buy (ยืนยันเฉพาะแท่งที่ปิดแล้ว)
     elif not position and df["Buy_Signal"].iloc[i]:
         entry_price = current_close
         entry_date = current_date
