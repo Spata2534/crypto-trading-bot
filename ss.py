@@ -2,6 +2,8 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 # -----------------------------------------------------------------------------
 # 1. PAGE CONFIGURATION & SETUP
@@ -124,23 +126,13 @@ elif "03. MACD Signal Line Crossover" in strategy_choice:
     df["Buy_Signal"] = (df["MACD"] > df["MACD_Signal"]) & (df["MACD"].shift(1) <= df["MACD_Signal"].shift(1))
     df["Sell_Signal"] = (df["MACD"] < df["MACD_Signal"]) & (df["MACD"].shift(1) >= df["MACD_Signal"].shift(1))
 
-# ... (รองรับกลยุทธ์อื่นๆ ตามโครงสร้างเดิมของคุณ) ...
-
 elif "16. Trend-Regime Dynamic Pullback" in strategy_choice:
-    # 1. เงื่อนไขเทรนด์ใหญ่: ราคา > EMA200 และ ADX > 20
     uptrend_strong = (df["Close"] > df["EMA200"]) & (df["ADX"] > 20)
-    
-    # 2. เงื่อนไขย่อตัว: RSI อยู่ระหว่าง 40 ถึง 55 (บล็อกการไล่ราคา Overbought)
     rsi_pullback = (df["RSI"] >= 40) & (df["RSI"] <= 55)
-    
-    # 3. เงื่อนไขราคา: เกิดแท่งเขียว (Close > Open) และราคาลงมาใกล้ EMA20 หรือ VWAP
     price_near_support = (df["Low"] <= df["EMA20"] * 1.01) | (df["Low"] <= df["VWAP"] * 1.01)
     green_candle = df["Close"] > df["Open"]
     
-    # Buy Signal
     df["Buy_Signal"] = uptrend_strong & rsi_pullback & price_near_support & green_candle
-    
-    # Sell Signal: ขายเมื่อ RSI > 72 หรือหลุด EMA50
     df["Sell_Signal"] = (df["RSI"] > 72) | (df["Close"] < df["EMA50"])
 
 # -----------------------------------------------------------------------------
@@ -162,7 +154,6 @@ for i in range(len(df)):
     current_atr = df["ATR"].iloc[i]
 
     if position:
-        # Check Stop Loss
         if current_low <= sl_price:
             exit_price = sl_price
             pnl = (exit_price - entry_price) / entry_price
@@ -176,7 +167,6 @@ for i in range(len(df)):
             })
             position = False
 
-        # Check Take Profit
         elif current_high >= tp_price:
             exit_price = tp_price
             pnl = (exit_price - entry_price) / entry_price
@@ -190,7 +180,6 @@ for i in range(len(df)):
             })
             position = False
             
-        # Check Sell Signal
         elif df["Sell_Signal"].iloc[i]:
             exit_price = current_close
             pnl = (exit_price - entry_price) / entry_price
@@ -230,22 +219,70 @@ if not trades_df.empty:
     col2.metric("อัตราการชนะ (Win Rate)", f"{win_rate:.1f}%")
     col3.metric("กำไรสุทธิรวม ($)", f"${net_profit_usd:.2f}")
     col4.metric("ผลตอบแทนสะสม (%)", f"{ret_pct:.2f}%", delta=f"{ret_pct:.2f}%")
-
-    st.subheader("📋 ประวัติการเทรด (Trade Log)")
-    st.dataframe(trades_df.style.format({
-        "Entry": "{:.2f}", "Exit": "{:.2f}",
-        "PnL (%)": "{:.2f}%", "Profit ($)": "{:.2f}"
-    }))
 else:
     col1.metric("จำนวนไม้ที่ปิดแล้ว", "0 ไม้")
     col2.metric("อัตราการชนะ (Win Rate)", "0.0%")
     col3.metric("กำไรสุทธิรวม ($)", "$0.00")
     col4.metric("ผลตอบแทนสะสม (%)", "0.00%")
-    st.warning("ไม่พบสัญญาณซื้อที่ตรงเงื่อนไขในช่วงเวลาที่เลือก (ระบบกรองความเสี่ยงเข้มงวด ช่วยหลีกเลี่ยงการเข้าเทรดสเปกะสปะ)")
+    st.warning("ไม่พบสัญญาณซื้อที่ตรงเงื่อนไขในช่วงเวลาที่เลือก")
 
 # -----------------------------------------------------------------------------
-# 7. CURRENT MARKET STATUS
+# 7. INTERACTIVE PLOTLY CHARTING (ส่วนที่เพิ่มเพื่อให้แสดงกราฟราคา)
 # -----------------------------------------------------------------------------
+st.subheader("📉 กราฟวิเคราะห์ราคาและจุดเข้า/ออกออเดอร์ (Interactive Chart)")
+
+fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
+                    vertical_spacing=0.03, row_heights=[0.75, 0.25])
+
+# กราฟแท่งเทียน Candlestick
+fig.add_trace(go.Candlestick(
+    x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"],
+    name="Price"
+), row=1, col=1)
+
+# เส้น Moving Averages & VWAP
+fig.add_trace(go.Scatter(x=df.index, y=df["EMA20"], line=dict(color='orange', width=1), name="EMA 20"), row=1, col=1)
+fig.add_trace(go.Scatter(x=df.index, y=df["EMA200"], line=dict(color='purple', width=1.5), name="EMA 200"), row=1, col=1)
+fig.add_trace(go.Scatter(x=df.index, y=df["VWAP"], line=dict(color='blue', width=1, dash='dash'), name="VWAP"), row=1, col=1)
+
+# จุดเข้าซื้อ (Buy Marker) และ จุดออกจากออเดอร์ (Sell Marker) จากผล Backtest
+if not trades_df.empty:
+    fig.add_trace(go.Scatter(
+        x=trades_df["Entry Date"], y=trades_df["Entry"],
+        mode="markers", marker=dict(symbol="triangle-up", size=11, color="lime"),
+        name="Buy Entry"
+    ), row=1, col=1)
+    
+    fig.add_trace(go.Scatter(
+        x=trades_df["Exit Date"], y=trades_df["Exit"],
+        mode="markers", marker=dict(symbol="triangle-down", size=11, color="red"),
+        name="Exit (TP/SL/Signal)"
+    ), row=1, col=1)
+
+# กราฟ RSI (Row 2)
+fig.add_trace(go.Scatter(x=df.index, y=df["RSI"], line=dict(color='green', width=1), name="RSI"), row=2, col=1)
+fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
+fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
+
+fig.update_layout(
+    height=650,
+    margin=dict(l=10, r=10, t=30, b=10),
+    xaxis_rangeslider_visible=False,
+    template="plotly_dark"
+)
+
+st.plotly_chart(fig, use_container_width=True)
+
+# -----------------------------------------------------------------------------
+# 8. CURRENT MARKET STATUS & TRADE LOG
+# -----------------------------------------------------------------------------
+if not trades_df.empty:
+    st.subheader("📋 ประวัติการเทรด (Trade Log)")
+    st.dataframe(trades_df.style.format({
+        "Entry": "{:.2f}", "Exit": "{:.2f}",
+        "PnL (%)": "{:.2f}%", "Profit ($)": "{:.2f}"
+    }))
+
 st.markdown("---")
 st.subheader("📌 สถานะสัญญาณปัจจุบัน (ยืนยันเฉพาะแท่งที่ปิดแล้ว)")
 last_row = df.iloc[-1]
