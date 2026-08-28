@@ -33,11 +33,9 @@ st.set_page_config(page_title="Multi-Asset Quant & AI News Analytics", layout="w
 st.title("📈 Multi-Asset Quant Backtest & AI News Dashboard")
 
 # -----------------------------------------------------------------------------
-# 2. SIDEBAR CONFIGURATION (เพิ่ม TISCO ในหมวดหุ้นไทย)
+# 2. DYNAMIC ASSET LIST SETUP (SESSION STATE)
 # -----------------------------------------------------------------------------
-st.sidebar.header("⚙️ 1. เลือกสินทรัพย์และไทม์เฟรม")
-
-asset_categories = {
+default_assets = {
     "🪙 Crypto Top Staking": {
         "Bitcoin (BTC/USD)": ("BTC-USD", "crypto"),
         "Ethereum (ETH/USD)": ("ETH-USD", "crypto"),
@@ -71,17 +69,53 @@ asset_categories = {
     }
 }
 
-category_choice = st.sidebar.selectbox("เลือกหมวดหมู่สินทรัพย์", options=list(asset_categories.keys()))
-selected_asset_label = st.sidebar.selectbox("เลือกชื่อหุ้น/เหรียญ", options=list(asset_categories[category_choice].keys()))
+if "asset_categories" not in st.session_state:
+    st.session_state.asset_categories = default_assets
 
-symbol_info = asset_categories[category_choice][selected_asset_label]
+# -----------------------------------------------------------------------------
+# 3. SIDEBAR CONFIGURATION
+# -----------------------------------------------------------------------------
+st.sidebar.header("⚙️ 1. เลือกสินทรัพย์และไทม์เฟรม")
+
+category_choice = st.sidebar.selectbox("เลือกหมวดหมู่สินทรัพย์", options=list(st.session_state.asset_categories.keys()))
+selected_asset_label = st.sidebar.selectbox("เลือกชื่อหุ้น/เหรียญ", options=list(st.session_state.asset_categories[category_choice].keys()))
+
+symbol_info = st.session_state.asset_categories[category_choice][selected_asset_label]
 
 if symbol_info[0] == "CUSTOM":
     symbol = st.sidebar.text_input("พิมพ์ Ticker (เช่น PTT.BK, TSLA, ETH-USD)", value="TISCO.BK").upper()
-    asset_type = "stock" if not symbol.endswith("-USD") else "crypto"
+    asset_type = "crypto" if symbol.endswith("-USD") or symbol.endswith("-USDT") else "stock"
 else:
     symbol = symbol_info[0]
     asset_type = symbol_info[1]
+
+# --- ส่วนเพิ่มหุ้น/เหรียญใหม่ลงในรายการ ---
+st.sidebar.markdown("---")
+with st.sidebar.expander("➕ เพิ่มหุ้น / เหรียญ ใหม่เข้า List"):
+    new_ticker = st.text_input("ระบุ Ticker (เช่น BANPU.BK, DOGE-USD)", value="").strip().upper()
+    new_label = st.text_input("ชื่อแสดงผล (เช่น BANPU หรือ Dogecoin)", value="").strip()
+    
+    if st.button("➕ เพิ่มเข้า List"):
+        if new_ticker and new_label:
+            # จำแนกประเภทอัตโนมัติ
+            if new_ticker.endswith(".BK"):
+                target_cat = "🇹🇭 หุ้นไทย (SET Dividend & Top Cap)"
+                a_type = "stock"
+            elif new_ticker.endswith("-USD") or new_ticker.endswith("-USDT"):
+                target_cat = "🪙 Crypto Top Staking"
+                a_type = "crypto"
+            else:
+                target_cat = "🇺🇸 หุ้นต่างประเทศ / US Tech & Index"
+                a_type = "stock"
+            
+            display_name = f"{new_label} ({new_ticker})"
+            st.session_state.asset_categories[target_cat][display_name] = (new_ticker, a_type)
+            st.success(f"เพิ่ม {display_name} เข้าใน {target_cat} สำเร็จ!")
+            st.rerun()
+        else:
+            st.warning("กรุณากรอกทั้ง Ticker และชื่อแสดงผลให้ครบถ้วน")
+
+st.sidebar.markdown("---")
 
 period = st.sidebar.selectbox("ช่วงเวลาย้อนหลัง", options=["1y", "2y", "5y", "max"], index=1)
 interval = st.sidebar.selectbox("Timeframe", options=["1d", "1wk"], index=0)
@@ -97,7 +131,7 @@ sl_multiplier = st.sidebar.number_input("Stop Loss (x ATR)", value=2.0, step=0.1
 tp_multiplier = st.sidebar.number_input("Take Profit (x ATR)", value=4.0, step=0.1)
 
 # -----------------------------------------------------------------------------
-# 3. NEWS & SENTIMENT ENGINE
+# 4. NEWS & SENTIMENT ENGINE
 # -----------------------------------------------------------------------------
 @st.cache_data(ttl=900)
 def fetch_news_and_sentiment(ticker_symbol, a_type):
@@ -150,7 +184,7 @@ def fetch_news_and_sentiment(ticker_symbol, a_type):
 news_data, overall_sentiment_score = fetch_news_and_sentiment(symbol, asset_type)
 
 # -----------------------------------------------------------------------------
-# 4. DATA FETCHING & INDICATORS
+# 5. DATA FETCHING & INDICATORS
 # -----------------------------------------------------------------------------
 @st.cache_data
 def load_data(ticker, p, i):
@@ -207,7 +241,7 @@ def compute_all_indicators(df_input, atr_p):
 df = compute_all_indicators(df_raw, atr_period)
 
 # -----------------------------------------------------------------------------
-# 5. BACKTEST ENGINE & STRATEGIES
+# 6. BACKTEST ENGINE & STRATEGIES
 # -----------------------------------------------------------------------------
 strategies_list = [
     "01. Golden Cross (EMA20/50)", "02. RSI Oversold Rebound (<30)", "03. MACD Zero-Line Cross",
@@ -306,7 +340,7 @@ def run_fast_backtest(df_input, strat_name, init_cap, risk_pct, fee, atr_m_sl, a
     return df_temp, pd.DataFrame(trades), pd.DataFrame({"Date": equity_dates, "Equity": equity_curve}).set_index("Date"), net_profit, position, entry_price, sl_price, tp_price, entry_date
 
 # -----------------------------------------------------------------------------
-# 6. DYNAMIC STRATEGY DROPDOWN
+# 7. DYNAMIC STRATEGY DROPDOWN
 # -----------------------------------------------------------------------------
 strategy_map = {}
 dropdown_options = []
@@ -328,7 +362,7 @@ df, trades_df, equity_df, net_profit_val, position, entry_price, sl_price, tp_pr
 )
 
 # -----------------------------------------------------------------------------
-# 7. DASHBOARD DISPLAY
+# 8. DASHBOARD DISPLAY
 # -----------------------------------------------------------------------------
 st.subheader(f"📌 สัญญาณปัจจุบัน & ข่าวสาร: {symbol}")
 
@@ -353,7 +387,7 @@ with c_col2:
 st.markdown("---")
 
 # -----------------------------------------------------------------------------
-# 8. CHART DISPLAY
+# 9. CHART DISPLAY
 # -----------------------------------------------------------------------------
 st.subheader(f"📉 กราฟราคา & จุดเข้าออกออเดอร์ ({symbol})")
 
@@ -375,7 +409,7 @@ st.plotly_chart(fig, use_container_width=True)
 st.markdown("---")
 
 # -----------------------------------------------------------------------------
-# 9. PERFORMANCE METRICS DASHBOARD (ใต้กราฟราคา)
+# 10. PERFORMANCE METRICS DASHBOARD
 # -----------------------------------------------------------------------------
 st.subheader(f"📊 สรุปผล Backtest: {strategy_choice}")
 col1, col2, col3, col4, col5, col6 = st.columns(6)
@@ -410,7 +444,7 @@ else:
 st.markdown("---")
 
 # -----------------------------------------------------------------------------
-# 10. TRADE LOG & EQUITY CURVE
+# 11. TRADE LOG & EQUITY CURVE
 # -----------------------------------------------------------------------------
 t_col1, t_col2 = st.columns([6, 4])
 
