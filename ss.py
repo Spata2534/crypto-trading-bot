@@ -435,7 +435,7 @@ else:
 st.markdown("---")
 
 # -----------------------------------------------------------------------------
-# 9. INTERACTIVE CHARTING & BACKTEST RESULTS (FIXED SYNTAX)
+# 9. INTERACTIVE CHARTING & BACKTEST RESULTS
 # -----------------------------------------------------------------------------
 st.subheader(f"📉 3. กราฟราคา & จุดเข้าออกออเดอร์ ({symbol})")
 
@@ -452,7 +452,6 @@ fig.add_trace(go.Scatter(x=df.index, y=df["RSI"], line=dict(color='green', width
 fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
 fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
 
-# --- แก้ไขไวยากรณ์ Plotly ตรงนี้ (เปลี่ยน xaxes เป็น xaxis และใช้ update_xaxes แยก) ---
 fig.update_layout(height=550, margin=dict(l=10, r=10, t=20, b=10))
 fig.update_xaxes(rangeslider_visible=False)
 
@@ -481,3 +480,49 @@ if not trades_df.empty:
     col4.metric("ผลตอบแทน (%)", f"{ret_pct:.2f}%")
     col5.metric("Profit Factor", f"{profit_factor:.2f}")
     col6.metric("Max Drawdown", f"{max_drawdown:.2f}%")
+else:
+    col1.metric("จำนวนไม้", "0")
+    col2.metric("Win Rate", "0.0%")
+    col3.metric("กำไรสุทธิ ($)", "$0.00")
+    col4.metric("ผลตอบแทน (%)", "0.00%")
+    col5.metric("Profit Factor", "0.00")
+    col6.metric("Max Drawdown", "0.00%")
+
+st.markdown("---")
+
+# -----------------------------------------------------------------------------
+# 10. TRADE HISTORY TABLE & EQUITY CURVE (เติมส่วนนี้ที่หายไป)
+# -----------------------------------------------------------------------------
+col_tab1, col_tab2 = st.columns([6, 4])
+
+with col_tab1:
+    st.subheader("📋 ประวัติรายการเทรดทั้งหมด (Trade Log History)")
+    if not trades_df.empty:
+        # จัดรูปแบบตัวเลขให้อ่านง่าย
+        formatted_trades = trades_df.copy()
+        formatted_trades["Entry Date"] = formatted_trades["Entry Date"].dt.strftime('%Y-%m-%d %H:%M')
+        formatted_trades["Exit Date"] = formatted_trades["Exit Date"].dt.strftime('%Y-%m-%d %H:%M')
+        
+        st.dataframe(
+            formatted_trades.style.format({
+                "Entry": "${:,.2f}",
+                "Exit": "${:,.2f}",
+                "Size (Units)": "{:,.4f}",
+                "PnL (%)": "{:+.2f}%",
+                "Profit ($)": "${:+.2f}",
+                "Capital After Trade": "${:,.2f}"
+            }),
+            use_container_width=True,
+            height=300
+        )
+    else:
+        st.info("ℹ️ ไม่มีประวัติการเทรดเกิดขึ้นในช่วงเวลาและเงื่อนไขกลยุทธ์ที่เลือก")
+
+with col_tab2:
+    st.subheader("📈 การเติบโตของพอร์ต (Equity Curve)")
+    if not equity_df.empty:
+        fig_equity = go.Figure()
+        fig_equity.add_trace(go.Scatter(x=equity_df.index, y=equity_df["Equity"], mode='lines', name='Account Balance', line=dict(color='#00CC96', width=2)))
+        fig_equity.update_layout(height=300, margin=dict(l=10, r=10, t=20, b=10))
+        fig_equity.update_xaxes(rangeslider_visible=False)
+        st.plotly_chart(fig_equity, use_container_width=True)
