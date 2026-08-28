@@ -6,17 +6,25 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import requests
 import nltk
-from nltk.sentiment.vader import SentimentIntensityAnalyzer
+import os
 
-# Download VADER Lexicon สำหรับ AI Sentiment (ทำครั้งเดียว)
+# -----------------------------------------------------------------------------
+# 0. NLTK DATA SETUP & INITIALIZATION
+# -----------------------------------------------------------------------------
+nltk_data_dir = os.path.join(os.getcwd(), 'nltk_data')
+if not os.path.exists(nltk_data_dir):
+    os.makedirs(nltk_data_dir)
+nltk.data.path.append(nltk_data_dir)
+
 @st.cache_resource
 def init_nltk():
     try:
         nltk.data.find('sentiment/vader_lexicon.zip')
     except LookupError:
-        nltk.download('vader_lexicon')
+        nltk.download('vader_lexicon', download_dir=nltk_data_dir)
 
 init_nltk()
+from nltk.sentiment.vader import SentimentIntensityAnalyzer
 
 # -----------------------------------------------------------------------------
 # 1. PAGE CONFIGURATION & SETUP
@@ -65,7 +73,7 @@ tp_multiplier = st.sidebar.number_input("Take Profit (x ATR)", value=4.0, step=0
 # -----------------------------------------------------------------------------
 # 3. AI NEWS FETCHING & SENTIMENT ENGINE
 # -----------------------------------------------------------------------------
-@st.cache_data(ttl=900) # Cache ข่าวไว้ 15 นาที เพื่อป้องกันการอืดและติด Rate Limit
+@st.cache_data(ttl=900)
 def fetch_crypto_news_and_sentiment(coin_ticker):
     url = f"https://min-api.cryptocompare.com/data/v2/news/?categories={coin_ticker}&excludeCategories=Sponsored"
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -76,7 +84,6 @@ def fetch_crypto_news_and_sentiment(coin_ticker):
         articles = res_json.get("Data", [])
         
         if not articles:
-            # Fallback หากไม่มีข่าวเฉพาะเหรียญ ให้ดึงข่าว Crypto ทั่วไป
             fallback_url = "https://min-api.cryptocompare.com/data/v2/news/?categories=Market&excludeCategories=Sponsored"
             res_json = requests.get(fallback_url, headers=headers, timeout=5).json()
             articles = res_json.get("Data", [])
@@ -85,12 +92,11 @@ def fetch_crypto_news_and_sentiment(coin_ticker):
         processed_news = []
         total_compound = 0.0
 
-        for item in articles[:7]: # เอาแค่ 7 ข่าวล่าสุด
+        for item in articles[:6]:
             title = item.get("title", "")
             body = item.get("body", "")
             full_text = f"{title}. {body}"
             
-            # คำนวณ Sentiment ด้วย VADER NLP
             scores = sia.polarity_scores(full_text)
             compound = scores["compound"]
             total_compound += compound
@@ -108,13 +114,13 @@ def fetch_crypto_news_and_sentiment(coin_ticker):
                 "source": item.get("source_info", {}).get("name", "CryptoNews"),
                 "sentiment": sentiment_label,
                 "score": compound,
-                "summary": body[:150] + "..."
+                "summary": body[:140] + "..."
             })
             
         avg_score = total_compound / len(processed_news) if processed_news else 0.0
         return processed_news, avg_score
 
-    except Exception as e:
+    except Exception:
         return [], 0.0
 
 news_data, overall_sentiment_score = fetch_crypto_news_and_sentiment(news_symbol)
@@ -400,7 +406,6 @@ with col_sys2:
 
     st.metric(label=f"สรุปข่าวสาร {news_symbol}", value=sentiment_status, delta=f"Score: {overall_sentiment_score:.2f}")
     
-    # AI Executive Summary Logic (ผสม Technical + Fundamental News)
     if last_row["Buy_Signal"] and overall_sentiment_score >= 0.05:
         st.success("🔥 High Confluence: สัญญาณเทรดทางเทคนิคและข่าวมองไปในทางเดียวกัน (Strong Buy)")
     elif last_row["Buy_Signal"] and overall_sentiment_score < -0.05:
@@ -430,7 +435,7 @@ else:
 st.markdown("---")
 
 # -----------------------------------------------------------------------------
-# 9. INTERACTIVE CHARTING & BACKTEST RESULTS
+# 9. INTERACTIVE CHARTING & BACKTEST RESULTS (FIXED SYNTAX)
 # -----------------------------------------------------------------------------
 st.subheader(f"📉 3. กราฟราคา & จุดเข้าออกออเดอร์ ({symbol})")
 
@@ -447,7 +452,10 @@ fig.add_trace(go.Scatter(x=df.index, y=df["RSI"], line=dict(color='green', width
 fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
 fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
 
-fig.update_layout(height=550, margin=dict(l=10, r=10, t=20, b=10), xaxes_rangeslider_visible=False)
+# --- แก้ไขไวยากรณ์ Plotly ตรงนี้ (เปลี่ยน xaxes เป็น xaxis และใช้ update_xaxes แยก) ---
+fig.update_layout(height=550, margin=dict(l=10, r=10, t=20, b=10))
+fig.update_xaxes(rangeslider_visible=False)
+
 st.plotly_chart(fig, use_container_width=True)
 
 # Performance Metrics Dashboard
