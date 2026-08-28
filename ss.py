@@ -327,7 +327,7 @@ df, trades_df, equity_df, net_profit_val, position, entry_price, sl_price, tp_pr
 )
 
 # -----------------------------------------------------------------------------
-# 7. DASHBOARD DISPLAY & METRICS (ใส่ส่วนสรุปผลงานคืนมาที่นี่)
+# 7. DASHBOARD DISPLAY
 # -----------------------------------------------------------------------------
 st.subheader(f"📌 สัญญาณปัจจุบัน & ข่าวสาร: {symbol}")
 
@@ -351,7 +351,31 @@ with c_col2:
 
 st.markdown("---")
 
-# --- ส่วนสรุปตัวเลขจำนวนไม้ และ ผลกำไร (PERFORMANCE METRICS DASHBOARD) ---
+# -----------------------------------------------------------------------------
+# 8. CHART DISPLAY
+# -----------------------------------------------------------------------------
+st.subheader(f"📉 กราฟราคา & จุดเข้าออกออเดอร์ ({symbol})")
+
+fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.75, 0.25])
+fig.add_trace(go.Candlestick(x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"], name="Price"), row=1, col=1)
+fig.add_trace(go.Scatter(x=df.index, y=df["EMA20"], line=dict(color='orange', width=1), name="EMA 20"), row=1, col=1)
+fig.add_trace(go.Scatter(x=df.index, y=df["EMA200"], line=dict(color='purple', width=1.5), name="EMA 200"), row=1, col=1)
+
+if not trades_df.empty:
+    fig.add_trace(go.Scatter(x=trades_df["Entry Date"], y=trades_df["Entry"], mode="markers", marker=dict(symbol="triangle-up", size=12, color="green"), name="Buy"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=trades_df["Exit Date"], y=trades_df["Exit"], mode="markers", marker=dict(symbol="triangle-down", size=12, color="red"), name="Exit"), row=1, col=1)
+
+fig.add_trace(go.Scatter(x=df.index, y=df["RSI"], line=dict(color='green', width=1), name="RSI"), row=2, col=1)
+fig.update_layout(height=500, margin=dict(l=10, r=10, t=20, b=10))
+fig.update_xaxes(rangeslider_visible=False)
+
+st.plotly_chart(fig, use_container_width=True)
+
+st.markdown("---")
+
+# -----------------------------------------------------------------------------
+# 9. PERFORMANCE METRICS DASHBOARD (ย้ายลงมาไว้ใต้กราฟที่นี่)
+# -----------------------------------------------------------------------------
 st.subheader(f"📊 สรุปผล Backtest: {strategy_choice}")
 col1, col2, col3, col4, col5, col6 = st.columns(6)
 
@@ -385,27 +409,7 @@ else:
 st.markdown("---")
 
 # -----------------------------------------------------------------------------
-# 8. CHART DISPLAY
-# -----------------------------------------------------------------------------
-st.subheader(f"📉 กราฟราคา & จุดเข้าออกออเดอร์ ({symbol})")
-
-fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.75, 0.25])
-fig.add_trace(go.Candlestick(x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"], name="Price"), row=1, col=1)
-fig.add_trace(go.Scatter(x=df.index, y=df["EMA20"], line=dict(color='orange', width=1), name="EMA 20"), row=1, col=1)
-fig.add_trace(go.Scatter(x=df.index, y=df["EMA200"], line=dict(color='purple', width=1.5), name="EMA 200"), row=1, col=1)
-
-if not trades_df.empty:
-    fig.add_trace(go.Scatter(x=trades_df["Entry Date"], y=trades_df["Entry"], mode="markers", marker=dict(symbol="triangle-up", size=12, color="green"), name="Buy"), row=1, col=1)
-    fig.add_trace(go.Scatter(x=trades_df["Exit Date"], y=trades_df["Exit"], mode="markers", marker=dict(symbol="triangle-down", size=12, color="red"), name="Exit"), row=1, col=1)
-
-fig.add_trace(go.Scatter(x=df.index, y=df["RSI"], line=dict(color='green', width=1), name="RSI"), row=2, col=1)
-fig.update_layout(height=500, margin=dict(l=10, r=10, t=20, b=10))
-fig.update_xaxes(rangeslider_visible=False)
-
-st.plotly_chart(fig, use_container_width=True)
-
-# -----------------------------------------------------------------------------
-# 9. TRADE LOG & EQUITY CURVE
+# 10. TRADE LOG & EQUITY CURVE
 # -----------------------------------------------------------------------------
 t_col1, t_col2 = st.columns([6, 4])
 
