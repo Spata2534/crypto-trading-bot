@@ -33,7 +33,7 @@ st.set_page_config(page_title="Multi-Asset Quant & AI News Analytics", layout="w
 st.title("📈 Multi-Asset Quant Backtest & AI News Dashboard")
 
 # -----------------------------------------------------------------------------
-# 2. SIDEBAR CONFIGURATION (เพิ่มรายการหุ้นไทย และ หุ้นต่างประเทศ)
+# 2. SIDEBAR CONFIGURATION
 # -----------------------------------------------------------------------------
 st.sidebar.header("⚙️ 1. เลือกสินทรัพย์และไทม์เฟรม")
 
@@ -82,7 +82,7 @@ else:
     symbol = symbol_info[0]
     asset_type = symbol_info[1]
 
-period = st.sidebar.selectbox("ช่วงเวลาย้อนหลัง", options=["3mo", "6mo", "1y", "2y", "5y"], index=2)
+period = st.sidebar.selectbox("ช่วงเวลาย้อนหลัง", options=["1y", "2y", "5y", "max"], index=1)
 interval = st.sidebar.selectbox("Timeframe", options=["1d", "1wk"], index=0)
 
 st.sidebar.subheader("💰 2. บริหารเงินทุน (Money Management)")
@@ -96,7 +96,7 @@ sl_multiplier = st.sidebar.number_input("Stop Loss (x ATR)", value=2.0, step=0.1
 tp_multiplier = st.sidebar.number_input("Take Profit (x ATR)", value=4.0, step=0.1)
 
 # -----------------------------------------------------------------------------
-# 3. UNIVERSAL NEWS FETCHING & SENTIMENT ENGINE (รองรับทั้ง Crypto และ Stock)
+# 3. NEWS & SENTIMENT ENGINE
 # -----------------------------------------------------------------------------
 @st.cache_data(ttl=900)
 def fetch_news_and_sentiment(ticker_symbol, a_type):
@@ -118,7 +118,6 @@ def fetch_news_and_sentiment(ticker_symbol, a_type):
                     "text": f"{item.get('title', '')}. {item.get('body', '')}"
                 })
         else:
-            # ดึงข่าวหุ้นไทย/ต่างประเทศผ่าน Yahoo Finance
             ticker_obj = yf.Ticker(ticker_symbol)
             raw_news = ticker_obj.news[:6] if ticker_obj.news else []
             for item in raw_news:
@@ -150,7 +149,7 @@ def fetch_news_and_sentiment(ticker_symbol, a_type):
 news_data, overall_sentiment_score = fetch_news_and_sentiment(symbol, asset_type)
 
 # -----------------------------------------------------------------------------
-# 4. DATA FETCHING & INDICATORS CALCULATION
+# 4. DATA FETCHING & INDICATORS
 # -----------------------------------------------------------------------------
 @st.cache_data
 def load_data(ticker, p, i):
@@ -207,7 +206,7 @@ def compute_all_indicators(df_input, atr_p):
 df = compute_all_indicators(df_raw, atr_period)
 
 # -----------------------------------------------------------------------------
-# 5. BACKTEST ENGINE & 20 STRATEGIES
+# 5. BACKTEST ENGINE & STRATEGIES
 # -----------------------------------------------------------------------------
 strategies_list = [
     "01. Golden Cross (EMA20/50)", "02. RSI Oversold Rebound (<30)", "03. MACD Zero-Line Cross",
@@ -224,8 +223,8 @@ def evaluate_signals(df_input, strat_name):
         df_temp["Buy_Signal"] = (df_temp["EMA20"] > df_temp["EMA50"]) & (df_temp["EMA20"].shift(1) <= df_temp["EMA50"].shift(1))
         df_temp["Sell_Signal"] = (df_temp["EMA20"] < df_temp["EMA50"]) & (df_temp["EMA20"].shift(1) >= df_temp["EMA50"].shift(1))
     elif "02." in strat_name:
-        df_temp["Buy_Signal"] = (df_temp["RSI"] < 30)
-        df_temp["Sell_Signal"] = (df_temp["RSI"] > 70)
+        df_temp["Buy_Signal"] = (df_temp["RSI"] < 35)
+        df_temp["Sell_Signal"] = (df_temp["RSI"] > 65)
     elif "03." in strat_name:
         df_temp["Buy_Signal"] = (df_temp["MACD"] > 0) & (df_temp["MACD"].shift(1) <= 0)
         df_temp["Sell_Signal"] = (df_temp["MACD"] < 0) & (df_temp["MACD"].shift(1) >= 0)
@@ -233,17 +232,17 @@ def evaluate_signals(df_input, strat_name):
         df_temp["Buy_Signal"] = df_temp["Close"] <= df_temp["BB_Lower"]
         df_temp["Sell_Signal"] = df_temp["Close"] >= df_temp["SMA20"]
     elif "05." in strat_name:
-        df_temp["Buy_Signal"] = (df_temp["Close"] > df_temp["EMA200"]) & (df_temp["Low"] <= df_temp["VWAP"]) & (df_temp["Close"] > df_temp["VWAP"])
+        df_temp["Buy_Signal"] = (df_temp["Low"] <= df_temp["VWAP"]) & (df_temp["Close"] > df_temp["VWAP"])
         df_temp["Sell_Signal"] = df_temp["Close"] < df_temp["EMA20"]
     elif "06." in strat_name:
         near_ema200 = (df_temp["Low"] <= df_temp["EMA200"] * 1.01) & (df_temp["High"] >= df_temp["EMA200"])
         df_temp["Buy_Signal"] = near_ema200 & (df_temp["Close"] > df_temp["EMA200"])
         df_temp["Sell_Signal"] = df_temp["Close"] < df_temp["EMA200"] * 0.98
     elif "07." in strat_name:
-        df_temp["Buy_Signal"] = (df_temp["RSI"] > 60) & (df_temp["RSI"].shift(1) <= 60)
-        df_temp["Sell_Signal"] = df_temp["RSI"] < 50
+        df_temp["Buy_Signal"] = (df_temp["RSI"] > 55) & (df_temp["RSI"].shift(1) <= 55)
+        df_temp["Sell_Signal"] = df_temp["RSI"] < 45
     elif "08." in strat_name:
-        df_temp["Buy_Signal"] = (df_temp["MACD"] > df_temp["MACD_Signal"]) & (df_temp["RSI"] > 55)
+        df_temp["Buy_Signal"] = (df_temp["MACD"] > df_temp["MACD_Signal"]) & (df_temp["RSI"] > 50)
         df_temp["Sell_Signal"] = (df_temp["MACD"] < df_temp["MACD_Signal"]) & (df_temp["RSI"] < 45)
 
     return df_temp
@@ -323,12 +322,12 @@ st.sidebar.subheader("🧠 4. เลือกระบบเทรด")
 selected_label = st.sidebar.selectbox("เลือกกลยุทธ์", options=dropdown_options, index=0)
 strategy_choice = strategy_map[selected_label]
 
-df, trades_df, equity_df, net_profit_usd, position, entry_price, sl_price, tp_price, entry_date = run_fast_backtest(
+df, trades_df, equity_df, net_profit_val, position, entry_price, sl_price, tp_price, entry_date = run_fast_backtest(
     df, strategy_choice, initial_capital, risk_per_trade_pct, fee_rate, sl_multiplier, tp_multiplier
 )
 
 # -----------------------------------------------------------------------------
-# 7. DASHBOARD DISPLAY
+# 7. DASHBOARD DISPLAY & METRICS (ใส่ส่วนสรุปผลงานคืนมาที่นี่)
 # -----------------------------------------------------------------------------
 st.subheader(f"📌 สัญญาณปัจจุบัน & ข่าวสาร: {symbol}")
 
@@ -352,10 +351,43 @@ with c_col2:
 
 st.markdown("---")
 
+# --- ส่วนสรุปตัวเลขจำนวนไม้ และ ผลกำไร (PERFORMANCE METRICS DASHBOARD) ---
+st.subheader(f"📊 สรุปผล Backtest: {strategy_choice}")
+col1, col2, col3, col4, col5, col6 = st.columns(6)
+
+if not trades_df.empty:
+    total_trades = len(trades_df)
+    wins = len(trades_df[trades_df["Profit"] > 0])
+    win_rate = (wins / total_trades) * 100
+    ret_pct = (net_profit_val / initial_capital) * 100
+    gross_profit = trades_df[trades_df["Profit"] > 0]["Profit"].sum()
+    gross_loss = abs(trades_df[trades_df["Profit"] < 0]["Profit"].sum())
+    profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else gross_profit
+    
+    equity_df["Peak"] = equity_df["Equity"].cummax()
+    equity_df["Drawdown"] = (equity_df["Equity"] - equity_df["Peak"]) / equity_df["Peak"]
+    max_drawdown = equity_df["Drawdown"].min() * 100
+
+    col1.metric("จำนวนไม้ที่เทรด", f"{total_trades} ไม้")
+    col2.metric("Win Rate", f"{win_rate:.1f}%")
+    col3.metric("กำไรสุทธิ", f"{net_profit_val:,.2f}")
+    col4.metric("ผลตอบแทน (%)", f"{ret_pct:.2f}%")
+    col5.metric("Profit Factor", f"{profit_factor:.2f}")
+    col6.metric("Max Drawdown", f"{max_drawdown:.2f}%")
+else:
+    col1.metric("จำนวนไม้ที่เทรด", "0 ไม้")
+    col2.metric("Win Rate", "0.0%")
+    col3.metric("กำไรสุทธิ", "0.00")
+    col4.metric("ผลตอบแทน (%)", "0.00%")
+    col5.metric("Profit Factor", "0.00")
+    col6.metric("Max Drawdown", "0.00%")
+
+st.markdown("---")
+
 # -----------------------------------------------------------------------------
-# 8. CHART & PERFORMANCE
+# 8. CHART DISPLAY
 # -----------------------------------------------------------------------------
-st.subheader(f"📉 กราฟราคา ({symbol})")
+st.subheader(f"📉 กราฟราคา & จุดเข้าออกออเดอร์ ({symbol})")
 
 fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.75, 0.25])
 fig.add_trace(go.Candlestick(x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"], name="Price"), row=1, col=1)
@@ -392,7 +424,7 @@ with t_col1:
             height=300
         )
     else:
-        st.info("ไม่มีรายการเทรดเกิดขึ้นตามเงื่อนไขที่เลือก")
+        st.info("ℹ️ ไม่มีรายการเทรดเกิดขึ้นตามเงื่อนไขที่เลือก (ลองปรับช่วงเวลาย้อนหลังเพิ่มขึ้นที่ Sidebar)")
 
 with t_col2:
     st.subheader("📈 การเติบโตของเงินทุน (Equity Curve)")
