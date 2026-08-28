@@ -4,12 +4,25 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import requests
+import nltk
+from nltk.sentiment.vader import SentimentIntensityAnalyzer
+
+# Download VADER Lexicon สำหรับ AI Sentiment (ทำครั้งเดียว)
+@st.cache_resource
+def init_nltk():
+    try:
+        nltk.data.find('sentiment/vader_lexicon.zip')
+    except LookupError:
+        nltk.download('vader_lexicon')
+
+init_nltk()
 
 # -----------------------------------------------------------------------------
 # 1. PAGE CONFIGURATION & SETUP
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Crypto Quantitative Backtest System (20 Strategies)", layout="wide")
-st.title("📈 Backtest Dashboard & Strategy Routing")
+st.set_page_config(page_title="Crypto Quant + AI News Analytics", layout="wide")
+st.title("📈 Backtest Dashboard & AI News Sentiment Analyzer")
 
 # -----------------------------------------------------------------------------
 # 2. SIDEBAR CONFIGURATION
@@ -17,23 +30,24 @@ st.title("📈 Backtest Dashboard & Strategy Routing")
 st.sidebar.header("⚙️ 1. เลือกสินทรัพย์และไทม์เฟรม")
 
 crypto_presets = {
-    "Bitcoin (BTC/USD)": "BTC-USD",
-    "Ethereum (ETH/USD)": "ETH-USD",
-    "Solana (SOL/USD)": "SOL-USD",
-    "Binance Coin (BNB/USD)": "BNB-USD",
-    "Ripple (XRP/USD)": "XRP-USD",
-    "Cardano (ADA/USD)": "ADA-USD",
-    "Dogecoin (DOGE/USD)": "DOGE-USD",
-    "Avalanche (AVAX/USD)": "AVAX-USD",
-    "Custom (ระบุเอง)": "CUSTOM"
+    "Bitcoin (BTC/USD)": ("BTC-USD", "BTC"),
+    "Ethereum (ETH/USD)": ("ETH-USD", "ETH"),
+    "Solana (SOL/USD)": ("SOL-USD", "SOL"),
+    "Binance Coin (BNB/USD)": ("BNB-USD", "BNB"),
+    "Ripple (XRP/USD)": ("XRP-USD", "XRP"),
+    "Cardano (ADA/USD)": ("ADA-USD", "ADA"),
+    "Dogecoin (DOGE/USD)": ("DOGE-USD", "DOGE"),
+    "Avalanche (AVAX/USD)": ("AVAX-USD", "AVAX"),
+    "Custom (ระบุเอง)": ("CUSTOM", "CUSTOM")
 }
 
 selected_preset = st.sidebar.selectbox("เลือกเหรียญยอดนิยม", options=list(crypto_presets.keys()), index=0)
 
-if crypto_presets[selected_preset] == "CUSTOM":
+if crypto_presets[selected_preset][0] == "CUSTOM":
     symbol = st.sidebar.text_input("พิมพ์สัญลักษณ์ Ticker (เช่น NEAR-USD)", value="NEAR-USD").upper()
+    news_symbol = symbol.split("-")[0]
 else:
-    symbol = crypto_presets[selected_preset]
+    symbol, news_symbol = crypto_presets[selected_preset]
 
 period = st.sidebar.selectbox("ช่วงเวลาย้อนหลัง", options=["3mo", "6mo", "1y", "2y", "5y"], index=2)
 interval = st.sidebar.selectbox("Timeframe", options=["1d", "4h", "1h"], index=0)
@@ -49,7 +63,64 @@ sl_multiplier = st.sidebar.number_input("Stop Loss (x ATR)", value=2.0, step=0.1
 tp_multiplier = st.sidebar.number_input("Take Profit (x ATR)", value=4.0, step=0.1)
 
 # -----------------------------------------------------------------------------
-# 3. DATA FETCHING & COMPLETE INDICATORS CALCULATION
+# 3. AI NEWS FETCHING & SENTIMENT ENGINE
+# -----------------------------------------------------------------------------
+@st.cache_data(ttl=900) # Cache ข่าวไว้ 15 นาที เพื่อป้องกันการอืดและติด Rate Limit
+def fetch_crypto_news_and_sentiment(coin_ticker):
+    url = f"https://min-api.cryptocompare.com/data/v2/news/?categories={coin_ticker}&excludeCategories=Sponsored"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=5)
+        res_json = response.json()
+        articles = res_json.get("Data", [])
+        
+        if not articles:
+            # Fallback หากไม่มีข่าวเฉพาะเหรียญ ให้ดึงข่าว Crypto ทั่วไป
+            fallback_url = "https://min-api.cryptocompare.com/data/v2/news/?categories=Market&excludeCategories=Sponsored"
+            res_json = requests.get(fallback_url, headers=headers, timeout=5).json()
+            articles = res_json.get("Data", [])
+
+        sia = SentimentIntensityAnalyzer()
+        processed_news = []
+        total_compound = 0.0
+
+        for item in articles[:7]: # เอาแค่ 7 ข่าวล่าสุด
+            title = item.get("title", "")
+            body = item.get("body", "")
+            full_text = f"{title}. {body}"
+            
+            # คำนวณ Sentiment ด้วย VADER NLP
+            scores = sia.polarity_scores(full_text)
+            compound = scores["compound"]
+            total_compound += compound
+            
+            if compound >= 0.05:
+                sentiment_label = "🟢 BULLISH"
+            elif compound <= -0.05:
+                sentiment_label = "🔴 BEARISH"
+            else:
+                sentiment_label = "⚪ NEUTRAL"
+
+            processed_news.append({
+                "title": title,
+                "url": item.get("url", "#"),
+                "source": item.get("source_info", {}).get("name", "CryptoNews"),
+                "sentiment": sentiment_label,
+                "score": compound,
+                "summary": body[:150] + "..."
+            })
+            
+        avg_score = total_compound / len(processed_news) if processed_news else 0.0
+        return processed_news, avg_score
+
+    except Exception as e:
+        return [], 0.0
+
+news_data, overall_sentiment_score = fetch_crypto_news_and_sentiment(news_symbol)
+
+# -----------------------------------------------------------------------------
+# 4. DATA FETCHING & INDICATORS CALCULATION
 # -----------------------------------------------------------------------------
 @st.cache_data
 def load_data(ticker, p, i):
@@ -65,36 +136,31 @@ def load_data(ticker, p, i):
 df_raw = load_data(symbol, period, interval)
 
 if df_raw.empty or len(df_raw) < 50:
-    st.error(f"❌ ไม่สามารถโหลดข้อมูลสำหรับ {symbol} ได้ หรือข้อมูลมีน้อยเกินไป กรุณาตรวจสอบสัญลักษณ์ Asset")
+    st.error(f"❌ ไม่สามารถโหลดข้อมูลสำหรับ {symbol} ได้ กรุณาตรวจสอบสัญลักษณ์ Asset")
     st.stop()
 
 @st.cache_data
 def compute_all_indicators(df_input, atr_p):
     df = df_input.copy()
     
-    # EMAs & SMAs
     df["EMA9"] = df["Close"].ewm(span=9, adjust=False).mean()
     df["EMA20"] = df["Close"].ewm(span=20, adjust=False).mean()
     df["EMA50"] = df["Close"].ewm(span=50, adjust=False).mean()
     df["EMA200"] = df["Close"].ewm(span=200, adjust=False).mean()
     df["SMA20"] = df["Close"].rolling(20).mean()
-    df["SMA50"] = df["Close"].rolling(50).mean()
 
-    # RSI
     delta = df["Close"].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss
     df["RSI"] = 100 - (100 / (1 + rs))
 
-    # ATR
     high_low = df["High"] - df["Low"]
     high_close = (df["High"] - df["Close"].shift()).abs()
     low_close = (df["Low"] - df["Close"].shift()).abs()
     true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
     df["ATR"] = true_range.rolling(atr_p).mean()
 
-    # ADX & DMI
     up_move = df["High"].diff()
     down_move = -df["Low"].diff()
     plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
@@ -105,7 +171,6 @@ def compute_all_indicators(df_input, atr_p):
     dx = 100 * (abs(df["Plus_DI"] - df["Minus_DI"]) / (df["Plus_DI"] + df["Minus_DI"]))
     df["ADX"] = dx.rolling(14).mean()
 
-    # VWAP & MACD
     vyp = (df["High"] + df["Low"] + df["Close"]) / 3 * df["Volume"]
     df["VWAP"] = vyp.cumsum() / df["Volume"].cumsum()
     ema12 = df["Close"].ewm(span=12, adjust=False).mean()
@@ -113,25 +178,19 @@ def compute_all_indicators(df_input, atr_p):
     df["MACD"] = ema12 - ema26
     df["MACD_Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
 
-    # Bollinger Bands
     std20 = df["Close"].rolling(20).std()
     df["BB_Upper"] = df["SMA20"] + (std20 * 2)
     df["BB_Lower"] = df["SMA20"] - (std20 * 2)
 
-    # Stochastic Oscillator
     low14 = df["Low"].rolling(14).min()
     high14 = df["High"].rolling(14).max()
     df["Stoch_K"] = 100 * ((df["Close"] - low14) / (high14 - low14))
     df["Stoch_D"] = df["Stoch_K"].rolling(3).mean()
 
-    # Donchian Channel
     df["Donchian_High"] = df["High"].rolling(20).max()
     df["Donchian_Low"] = df["Low"].rolling(20).min()
-
-    # Volume Moving Average
     df["Volume_MA20"] = df["Volume"].rolling(20).mean()
 
-    # Supertrend Dynamic (Basic Concept)
     hl2 = (df["High"] + df["Low"]) / 2
     df["ST_Upper"] = hl2 + (1.5 * df["ATR"])
     df["ST_Lower"] = hl2 - (1.5 * df["ATR"])
@@ -141,29 +200,16 @@ def compute_all_indicators(df_input, atr_p):
 df = compute_all_indicators(df_raw, atr_period)
 
 # -----------------------------------------------------------------------------
-# 4. BACKTEST ENGINE & 20 STRATEGIES DEFINITION
+# 5. BACKTEST ENGINE & 20 STRATEGIES
 # -----------------------------------------------------------------------------
 strategies_list = [
-    "01. Golden Cross (EMA20/50)",
-    "02. RSI Oversold Rebound (<30)",
-    "03. MACD Zero-Line Cross",
-    "04. Bollinger Band Mean Reversion",
-    "05. Donchian Channel 20-Period Breakout",
-    "06. Supertrend Trend Following",
-    "07. Stochastic Crossover (<20)",
-    "08. VWAP Pullback Strategy",
-    "09. Volume Breakout (Volume > 2x MA20)",
-    "10. Triple EMA Trend System (9/20/50)",
-    "11. ADX Strong Trend Rider (ADX > 25 & +DI > -DI)",
-    "12. RSI Momentum Breakout (RSI > 60 Cross)",
-    "13. Multi-Timeframe Alignment (Trend + Momentum)",
-    "14. ATR Volatility Expansion Breakout",
-    "15. Bollinger Band Squeeze Breakout",
-    "16. Trend-Regime Dynamic Pullback",
-    "17. Counter-Trend Exhaustion (RSI < 25 & BB Lower)",
-    "18. Dual Thrust System",
-    "19. MACD + RSI Confluence",
-    "20. EMA200 Institutional Anchor Rebound"
+    "01. Golden Cross (EMA20/50)", "02. RSI Oversold Rebound (<30)", "03. MACD Zero-Line Cross",
+    "04. Bollinger Band Mean Reversion", "05. Donchian Channel Breakout", "06. Supertrend Trend Following",
+    "07. Stochastic Crossover (<20)", "08. VWAP Pullback Strategy", "09. Volume Breakout (>2x MA20)",
+    "10. Triple EMA System (9/20/50)", "11. ADX Strong Trend Rider", "12. RSI Momentum Breakout (>60)",
+    "13. Multi-Timeframe Alignment", "14. ATR Volatility Expansion", "15. Bollinger Squeeze Breakout",
+    "16. Trend-Regime Dynamic Pullback", "17. Counter-Trend Exhaustion", "18. Dual Thrust System",
+    "19. MACD + RSI Confluence", "20. EMA200 Institutional Rebound"
 ]
 
 def evaluate_signals(df_input, strat_name):
@@ -190,7 +236,7 @@ def evaluate_signals(df_input, strat_name):
         df_temp["Buy_Signal"] = (df_temp["Close"] > df_temp["ST_Upper"].shift(1))
         df_temp["Sell_Signal"] = (df_temp["Close"] < df_temp["ST_Lower"].shift(1))
     elif "07." in strat_name:
-        df_temp["Buy_Signal"] = (df_temp["Stoch_K"] < 20) & (df_temp["Stoch_K"] > df_temp["Stoch_D"]) & (df_temp["Stoch_K"].shift(1) <= df_temp["Stoch_D"].shift(1))
+        df_temp["Buy_Signal"] = (df_temp["Stoch_K"] < 20) & (df_temp["Stoch_K"] > df_temp["Stoch_D"])
         df_temp["Sell_Signal"] = (df_temp["Stoch_K"] > 80)
     elif "08." in strat_name:
         df_temp["Buy_Signal"] = (df_temp["Close"] > df_temp["EMA200"]) & (df_temp["Low"] <= df_temp["VWAP"]) & (df_temp["Close"] > df_temp["VWAP"])
@@ -199,17 +245,17 @@ def evaluate_signals(df_input, strat_name):
         df_temp["Buy_Signal"] = (df_temp["Volume"] > df_temp["Volume_MA20"] * 2.0) & (df_temp["Close"] > df_temp["Open"])
         df_temp["Sell_Signal"] = df_temp["Close"] < df_temp["EMA20"]
     elif "10." in strat_name:
-        df_temp["Buy_Signal"] = (df_temp["EMA9"] > df_temp["EMA20"]) & (df_temp["EMA20"] > df_temp["EMA50"]) & (df_temp["EMA9"].shift(1) <= df_temp["EMA20"].shift(1))
+        df_temp["Buy_Signal"] = (df_temp["EMA9"] > df_temp["EMA20"]) & (df_temp["EMA20"] > df_temp["EMA50"])
         df_temp["Sell_Signal"] = df_temp["EMA9"] < df_temp["EMA20"]
     elif "11." in strat_name:
-        df_temp["Buy_Signal"] = (df_temp["ADX"] > 25) & (df_temp["Plus_DI"] > df_temp["Minus_DI"]) & (df_temp["Plus_DI"].shift(1) <= df_temp["Minus_DI"].shift(1))
+        df_temp["Buy_Signal"] = (df_temp["ADX"] > 25) & (df_temp["Plus_DI"] > df_temp["Minus_DI"])
         df_temp["Sell_Signal"] = df_temp["Minus_DI"] > df_temp["Plus_DI"]
     elif "12." in strat_name:
         df_temp["Buy_Signal"] = (df_temp["RSI"] > 60) & (df_temp["RSI"].shift(1) <= 60)
         df_temp["Sell_Signal"] = df_temp["RSI"] < 50
     elif "13." in strat_name:
         df_temp["Buy_Signal"] = (df_temp["Close"] > df_temp["EMA200"]) & (df_temp["RSI"] > 50) & (df_temp["MACD"] > df_temp["MACD_Signal"])
-        df_temp["Sell_Signal"] = (df_temp["RSI"] < 45) | (df_temp["MACD"] < df_temp["MACD_Signal"])
+        df_temp["Sell_Signal"] = (df_temp["RSI"] < 45)
     elif "14." in strat_name:
         atr_breakout = (df_temp["High"] - df_temp["Low"]) > (df_temp["ATR"] * 1.8)
         df_temp["Buy_Signal"] = atr_breakout & (df_temp["Close"] > df_temp["Open"])
@@ -300,7 +346,7 @@ def run_fast_backtest(df_input, strat_name, init_cap, risk_pct, fee, atr_m_sl, a
     return df_temp, pd.DataFrame(trades), pd.DataFrame({"Date": equity_dates, "Equity": equity_curve}).set_index("Date"), net_profit, position, entry_price, sl_price, tp_price, entry_date
 
 # -----------------------------------------------------------------------------
-# 5. DYNAMIC DROPDOWN WITH WIN/LOSS ICONS
+# 6. DYNAMIC STRATEGY DROPDOWN
 # -----------------------------------------------------------------------------
 strategy_map = {}
 dropdown_options = []
@@ -309,134 +355,121 @@ for strat in strategies_list:
     _, _, _, net_pnl, _, _, _, _, _ = run_fast_backtest(
         df, strat, initial_capital, risk_per_trade_pct, fee_rate, sl_multiplier, tp_multiplier
     )
-    if net_pnl > 0:
-        label = f"✅ {strat} (+$ {net_pnl:.2f})"
-    else:
-        label = f"❌ {strat} (-$ {abs(net_pnl):.2f})"
+    label = f"✅ {strat} (+$ {net_pnl:.2f})" if net_pnl > 0 else f"❌ {strat} (-$ {abs(net_pnl):.2f})"
     strategy_map[label] = strat
     dropdown_options.append(label)
 
 st.sidebar.subheader("🧠 4. เลือกระบบเทรด (20 Strategies)")
-selected_label = st.sidebar.selectbox(
-    "เลือกกลยุทธ์ (✅ = กำไรสุทธิ / ❌ = ขาดทุน)", 
-    options=dropdown_options, 
-    index=15 # Default Selected Strategy 16
-)
+selected_label = st.sidebar.selectbox("เลือกกลยุทธ์", options=dropdown_options, index=15)
 strategy_choice = strategy_map[selected_label]
 
-# Execute Detailed Backtest for User Choice
 df, trades_df, equity_df, net_profit_usd, position, entry_price, sl_price, tp_price, entry_date = run_fast_backtest(
     df, strategy_choice, initial_capital, risk_per_trade_pct, fee_rate, sl_multiplier, tp_multiplier
 )
 
 # -----------------------------------------------------------------------------
-# 6. TOP SECTION: CURRENT MARKET STATUS (📌 สถานะสัญญาณปัจจุบัน อยู่บนสุด)
+# 7. TOP SECTION: SIGNAL + AI SENTIMENT DASHBOARD
 # -----------------------------------------------------------------------------
-st.subheader("📌 สถานะสัญญาณปัจจุบัน (การวิเคราะห์แท่งล่าสุด)")
+st.subheader("📌 1. สถานะสัญญาณเทรด & AI Market Sentiment")
+
 last_row = df.iloc[-1]
+col_sys1, col_sys2 = st.columns([1, 1])
 
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("ราคาปัจจุบัน", f"${last_row['Close']:,.2f}")
-c2.metric("RSI (14)", f"{last_row['RSI']:.2f}")
-c3.metric("ADX Trend", f"{last_row['ADX']:.2f}")
-c4.metric("VWAP Level", f"${last_row['VWAP']:,.2f}")
+with col_sys1:
+    st.markdown("##### 🤖 Quantitative Signal Result")
+    c1, c2 = st.columns(2)
+    c1.metric("ราคาปัจจุบัน", f"${last_row['Close']:,.2f}")
+    c2.metric("RSI (14)", f"{last_row['RSI']:.2f}")
 
-if position:
-    st.warning(f"🔔 มีสถานะค้างอยู่ 1 ออเดอร์ | เข้าซื้อเมื่อ: {entry_date} | ราคาเข้า: ${entry_price:,.2f} | Target TP: ${tp_price:,.2f} | Cut SL: ${sl_price:,.2f}")
-elif last_row["Buy_Signal"]:
-    st.success(f"✅ BUY SIGNAL CONFIRMED | ราคาปัจจุบัน: ${last_row['Close']:,.2f} | TP แนะนำ: ${last_row['Close'] + (last_row['ATR']*tp_multiplier):,.2f} | SL แนะนำ: ${last_row['Close'] - (last_row['ATR']*sl_multiplier):,.2f}")
-else:
-    st.info("⏳ NO SIGNAL - ไม่อยู่ในจุดย่อตัวที่ได้เปรียบ แนะนำถือเงินสด (Cash Position) ไว้ก่อน")
+    if position:
+        st.warning(f"🔔 มีสถานะค้างอยู่ | Entry: ${entry_price:,.2f} | TP: ${tp_price:,.2f} | SL: ${sl_price:,.2f}")
+    elif last_row["Buy_Signal"]:
+        st.success(f"✅ BUY SIGNAL CONFIRMED | ราคา: ${last_row['Close']:,.2f}")
+    else:
+        st.info("⏳ NO SIGNAL - ถือเงินสด (Cash Position)")
+
+with col_sys2:
+    st.markdown("##### 📰 AI Sentiment Score (ข่าวเรียลไทม์)")
+    
+    if overall_sentiment_score >= 0.05:
+        sentiment_status = "🟢 BULLISH (ข่าวเชิงบวก)"
+    elif overall_sentiment_score <= -0.05:
+        sentiment_status = "🔴 BEARISH (ข่าวเชิงลบ)"
+    else:
+        sentiment_status = "⚪ NEUTRAL (ข่าวเป็นกลาง)"
+
+    st.metric(label=f"สรุปข่าวสาร {news_symbol}", value=sentiment_status, delta=f"Score: {overall_sentiment_score:.2f}")
+    
+    # AI Executive Summary Logic (ผสม Technical + Fundamental News)
+    if last_row["Buy_Signal"] and overall_sentiment_score >= 0.05:
+        st.success("🔥 High Confluence: สัญญาณเทรดทางเทคนิคและข่าวมองไปในทางเดียวกัน (Strong Buy)")
+    elif last_row["Buy_Signal"] and overall_sentiment_score < -0.05:
+        st.error("⚠️ Divergence Warning: สัญญาณเทรดเป็น BUY แต่ข่าวยังเป็น BEARISH ระวัง False Break")
+    else:
+        st.caption("ℹ️ ตลาดอยู่ในสภาวะปกติตามสัญญาณ Quantitative Model")
 
 st.markdown("---")
 
 # -----------------------------------------------------------------------------
-# 7. INTERACTIVE PLOTLY CHARTING
+# 8. LIVE NEWS FEED & DETAILS
 # -----------------------------------------------------------------------------
-st.subheader(f"📉 กราฟราคาสินทรัพย์ & จุดเข้าทำกำไร/ตัดขาดทุน ({symbol})")
+st.subheader(f"🌐 2. อัปเดตข่าวสารล่าสุดเกี่ยวกับ {news_symbol} (AI Analyzed)")
 
-fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
-                    vertical_spacing=0.03, row_heights=[0.75, 0.25])
+if news_data:
+    news_cols = st.columns(3)
+    for idx, item in enumerate(news_data[:6]):
+        col_target = news_cols[idx % 3]
+        with col_target:
+            with st.container(border=True):
+                st.markdown(f"**[{item['title']}]({item['url']})**")
+                st.caption(f"สำนักข่าว: {item['source']} | Sentiment: **{item['sentiment']}** (Score: {item['score']:.2f})")
+                st.write(item['summary'])
+else:
+    st.warning("⚠️ ไม่พบข้อมูลข่าวสารล่าสุด หรือ API มีปัญหากับการดึงข้อมูล")
 
-fig.add_trace(go.Candlestick(
-    x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"],
-    name="Price"
-), row=1, col=1)
+st.markdown("---")
 
+# -----------------------------------------------------------------------------
+# 9. INTERACTIVE CHARTING & BACKTEST RESULTS
+# -----------------------------------------------------------------------------
+st.subheader(f"📉 3. กราฟราคา & จุดเข้าออกออเดอร์ ({symbol})")
+
+fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.75, 0.25])
+fig.add_trace(go.Candlestick(x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"], name="Price"), row=1, col=1)
 fig.add_trace(go.Scatter(x=df.index, y=df["EMA20"], line=dict(color='orange', width=1), name="EMA 20"), row=1, col=1)
 fig.add_trace(go.Scatter(x=df.index, y=df["EMA200"], line=dict(color='purple', width=1.5), name="EMA 200"), row=1, col=1)
-fig.add_trace(go.Scatter(x=df.index, y=df["VWAP"], line=dict(color='blue', width=1, dash='dash'), name="VWAP"), row=1, col=1)
 
 if not trades_df.empty:
-    fig.add_trace(go.Scatter(
-        x=trades_df["Entry Date"], y=trades_df["Entry"],
-        mode="markers", marker=dict(symbol="triangle-up", size=12, color="green"),
-        name="Buy Entry"
-    ), row=1, col=1)
-    
-    fig.add_trace(go.Scatter(
-        x=trades_df["Exit Date"], y=trades_df["Exit"],
-        mode="markers", marker=dict(symbol="triangle-down", size=12, color="red"),
-        name="Exit Order"
-    ), row=1, col=1)
+    fig.add_trace(go.Scatter(x=trades_df["Entry Date"], y=trades_df["Entry"], mode="markers", marker=dict(symbol="triangle-up", size=12, color="green"), name="Buy"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=trades_df["Exit Date"], y=trades_df["Exit"], mode="markers", marker=dict(symbol="triangle-down", size=12, color="red"), name="Exit"), row=1, col=1)
 
 fig.add_trace(go.Scatter(x=df.index, y=df["RSI"], line=dict(color='green', width=1), name="RSI"), row=2, col=1)
 fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
 fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
 
-fig.update_layout(
-    height=600,
-    margin=dict(l=10, r=10, t=20, b=10),
-    xaxis_rangeslider_visible=False,
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-)
-
+fig.update_layout(height=550, margin=dict(l=10, r=10, t=20, b=10), xaxes_rangeslider_visible=False)
 st.plotly_chart(fig, use_container_width=True)
 
-# -----------------------------------------------------------------------------
-# 8. PERFORMANCE DASHBOARD METRICS
-# -----------------------------------------------------------------------------
-st.markdown("---")
-st.subheader(f"📊 สรุปประสิทธิภาพกลยุทธ์: {strategy_choice}")
-
+# Performance Metrics Dashboard
+st.subheader(f"📊 สรุปผล Backtest: {strategy_choice}")
 col1, col2, col3, col4, col5, col6 = st.columns(6)
 
 if not trades_df.empty:
     total_trades = len(trades_df)
     wins = len(trades_df[trades_df["Profit ($)"] > 0])
-    win_rate = (wins / total_trades) * 100 if total_trades > 0 else 0
+    win_rate = (wins / total_trades) * 100
     ret_pct = (net_profit_usd / initial_capital) * 100
-    
     gross_profit = trades_df[trades_df["Profit ($)"] > 0]["Profit ($)"].sum()
     gross_loss = abs(trades_df[trades_df["Profit ($)"] < 0]["Profit ($)"].sum())
-    profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else (gross_profit if gross_profit > 0 else 0)
+    profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else gross_profit
     
     equity_df["Peak"] = equity_df["Equity"].cummax()
     equity_df["Drawdown"] = (equity_df["Equity"] - equity_df["Peak"]) / equity_df["Peak"]
     max_drawdown = equity_df["Drawdown"].min() * 100
 
-    col1.metric("จำนวนไม้ทั้งหมด", f"{total_trades} ไม้")
+    col1.metric("จำนวนไม้", f"{total_trades}")
     col2.metric("Win Rate", f"{win_rate:.1f}%")
     col3.metric("กำไรสุทธิ ($)", f"${net_profit_usd:.2f}")
-    col4.metric("ผลตอบแทนสะสม (%)", f"{ret_pct:.2f}%", delta=f"{ret_pct:.2f}%")
+    col4.metric("ผลตอบแทน (%)", f"{ret_pct:.2f}%")
     col5.metric("Profit Factor", f"{profit_factor:.2f}")
-    col6.metric("Max Drawdown", f"{max_drawdown:.2f}%", delta_color="inverse")
-else:
-    col1.metric("จำนวนไม้ทั้งหมด", "0 ไม้")
-    col2.metric("Win Rate", "0.0%")
-    col3.metric("กำไรสุทธิ ($)", "$0.00")
-    col4.metric("ผลตอบแทนสะสม (%)", "0.00%")
-    col5.metric("Profit Factor", "0.00")
-    col6.metric("Max Drawdown", "0.00%")
-    st.warning("⚠️ ไม่พบสัญญาณซื้อที่ตรงตามเงื่อนไขในช่วงเวลาที่เลือก")
-
-# -----------------------------------------------------------------------------
-# 9. TRADE LOG
-# -----------------------------------------------------------------------------
-if not trades_df.empty:
-    st.markdown("---")
-    st.subheader("📋 ตารางบันทึกการเทรด (Trade Log Detailed)")
-    st.dataframe(trades_df.style.format({
-        "Entry": "{:.2f}", "Exit": "{:.2f}", "Size (Units)": "{:.4f}",
-        "PnL (%)": "{:.2f}%", "Profit ($)": "{:.2f}", "Capital After Trade": "{:.2f}"
-    }), use_container_width=True)
+    col6.metric("Max Drawdown", f"{max_drawdown:.2f}%")
