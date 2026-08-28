@@ -33,7 +33,7 @@ st.set_page_config(page_title="Multi-Asset Quant & AI News Analytics", layout="w
 st.title("📈 Multi-Asset Quant Backtest & AI News Dashboard")
 
 # -----------------------------------------------------------------------------
-# 2. SIDEBAR CONFIGURATION
+# 2. SIDEBAR CONFIGURATION (เพิ่ม TISCO ในหมวดหุ้นไทย)
 # -----------------------------------------------------------------------------
 st.sidebar.header("⚙️ 1. เลือกสินทรัพย์และไทม์เฟรม")
 
@@ -45,7 +45,8 @@ asset_categories = {
         "Binance Coin (BNB/USD)": ("BNB-USD", "crypto"),
         "Ripple (XRP/USD)": ("XRP-USD", "crypto")
     },
-    "🇹🇭 หุ้นไทย (SET Top Market Cap)": {
+    "🇹🇭 หุ้นไทย (SET Dividend & Top Cap)": {
+        "TISCO (บมจ.ทิสโก้ไฟแนนเชียลกรุ๊ป)": ("TISCO.BK", "stock"),
         "DELTA (บมจ.เดลต้า อีเลคโทรนิคส์)": ("DELTA.BK", "stock"),
         "PTT (บมจ.ปตท.)": ("PTT.BK", "stock"),
         "AOT (บมจ.ท่าอากาศยานไทย)": ("AOT.BK", "stock"),
@@ -76,7 +77,7 @@ selected_asset_label = st.sidebar.selectbox("เลือกชื่อหุ�
 symbol_info = asset_categories[category_choice][selected_asset_label]
 
 if symbol_info[0] == "CUSTOM":
-    symbol = st.sidebar.text_input("พิมพ์ Ticker (เช่น PTT.BK, TSLA, ETH-USD)", value="TSLA").upper()
+    symbol = st.sidebar.text_input("พิมพ์ Ticker (เช่น PTT.BK, TSLA, ETH-USD)", value="TISCO.BK").upper()
     asset_type = "stock" if not symbol.endswith("-USD") else "crypto"
 else:
     symbol = symbol_info[0]
@@ -374,7 +375,7 @@ st.plotly_chart(fig, use_container_width=True)
 st.markdown("---")
 
 # -----------------------------------------------------------------------------
-# 9. PERFORMANCE METRICS DASHBOARD (ย้ายลงมาไว้ใต้กราฟที่นี่)
+# 9. PERFORMANCE METRICS DASHBOARD (ใต้กราฟราคา)
 # -----------------------------------------------------------------------------
 st.subheader(f"📊 สรุปผล Backtest: {strategy_choice}")
 col1, col2, col3, col4, col5, col6 = st.columns(6)
